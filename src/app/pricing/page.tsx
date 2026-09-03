@@ -1,8 +1,8 @@
 const plans=[
-{name:"Scout",price:"€39",desc:"1 marketplace · 5 scanners · 15-min alerts"},
-{name:"Pro",price:"€89",desc:"25 scanners · fast alerts · full AI evidence",featured:true},
-{name:"Multi Pro",price:"€149",desc:"3 marketplaces · 75 scanners · arbitrage"},
-{name:"Business",price:"€249",desc:"All sources · 250 scanners · 3 users"}
+{name:"Scout",price:"€39",desc:"1 required marketplace · 5 scanners · 15-min alerts"},
+{name:"Pro",price:"€89",desc:"Up to 2 marketplaces · 25 scanners · fast alerts · full AI evidence",featured:true},
+{name:"Multi Pro",price:"€149",desc:"Up to 3 marketplaces · 75 scanners · arbitrage"},
+{name:"Business",price:"€249",desc:"No marketplace required · broad all-web search · 250 scanners · 3 users"}
 ];
 export default function Pricing(){
  return <main className="shell"><nav className="nav"><a className="brand" href="/">UnderAsk</a><div className="navLinks"><a href="/search">Search</a><a href="/pricing">Pricing</a></div></nav>
