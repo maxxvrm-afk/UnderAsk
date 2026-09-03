@@ -20,6 +20,12 @@ export type UnderAskEntitlement = {
   cancel_at_period_end: boolean;
 };
 
+export type SignUpResult = {
+  session: OtwSession | null;
+  needsEmailConfirmation: boolean;
+  userId: string;
+};
+
 function normalizeSession(data: any): OtwSession {
   const expiresIn = Number(data?.expires_in) || 3600;
   return {
@@ -55,6 +61,49 @@ export async function signInWithOwnTheWall(email: string, password: string) {
 
   localStorage.setItem(SESSION_KEY, JSON.stringify(session));
   return session;
+}
+
+export async function signUpWithOwnTheWall(
+  email: string,
+  password: string,
+  redirectTo?: string,
+): Promise<SignUpResult> {
+  const url = new URL(`${OTW_SUPABASE_URL}/auth/v1/signup`);
+  if (redirectTo) url.searchParams.set("redirect_to", redirectTo);
+
+  const response = await fetch(url.toString(), {
+    method: "POST",
+    headers: {
+      apikey: OTW_PUBLISHABLE_KEY,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      email,
+      password,
+      data: { created_via: "underask" },
+    }),
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(
+      data?.msg || data?.error_description || data?.message || "Could not create account.",
+    );
+  }
+
+  const userId = String(data?.user?.id || data?.id || "");
+  const session = normalizeSession(data);
+
+  if (session.access_token && session.refresh_token && session.user.id) {
+    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    return { session, needsEmailConfirmation: false, userId: session.user.id };
+  }
+
+  if (!userId) {
+    throw new Error("Account creation returned an incomplete response.");
+  }
+
+  return { session: null, needsEmailConfirmation: true, userId };
 }
 
 export function getStoredOwnTheWallSession(): OtwSession | null {
