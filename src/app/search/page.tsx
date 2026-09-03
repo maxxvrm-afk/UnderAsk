@@ -19,7 +19,7 @@ const SITE_OPTIONS = [
 ];
 
 // Temporary until authenticated subscription status is added.
-const ACTIVE_PLAN: PlanId = "business";
+const ACTIVE_PLAN: PlanId = "scout";
 
 export default function SearchPage() {
   const router = useRouter();
