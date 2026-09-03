@@ -10,8 +10,12 @@ import {
   type UnderAskEntitlement,
 } from "@/lib/ownTheWallAuth";
 import {
+  cancelUnderAskSubscription,
+  changeUnderAskPlan,
   createUnderAskCheckout,
+  reactivateUnderAskSubscription,
   subscriptionHasAccess,
+  type SubscriptionUpdate,
 } from "@/lib/underAskBilling";
 
 const plans: Array<{
@@ -48,13 +52,32 @@ const plans: Array<{
   },
 ];
 
+function planName(plan: PlanId) {
+  return plans.find((item) => item.id === plan)?.name || "UnderAsk";
+}
+
+function dateLabel(value: string | null) {
+  if (!value) return "the end of your billing period";
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    }).format(new Date(value));
+  } catch {
+    return "the end of your billing period";
+  }
+}
+
 export default function Pricing() {
   const router = useRouter();
   const [session, setSession] = useState<OtwSession | null>(null);
   const [entitlement, setEntitlement] = useState<UnderAskEntitlement | null>(null);
   const [checking, setChecking] = useState(true);
   const [loadingPlan, setLoadingPlan] = useState<PlanId | null>(null);
+  const [billingAction, setBillingAction] = useState<"cancel" | "reactivate" | null>(null);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
 
   useEffect(() => {
     let mounted = true;
@@ -85,23 +108,44 @@ export default function Pricing() {
     };
   }, []);
 
-  async function startCheckout(plan: PlanId) {
+  function applyUpdate(update: SubscriptionUpdate) {
+    setEntitlement({
+      plan: update.plan,
+      subscription_status: update.subscription_status,
+      current_period_end: update.current_period_end,
+      cancel_at_period_end: update.cancel_at_period_end,
+    });
+  }
+
+  async function choosePlan(plan: PlanId) {
     setError("");
+    setNotice("");
 
     if (!session) {
       router.push("/login?next=/pricing");
       return;
     }
 
-    if (entitlement && subscriptionHasAccess(entitlement.subscription_status)) {
+    const hasSubscription = Boolean(
+      entitlement && subscriptionHasAccess(entitlement.subscription_status),
+    );
+
+    if (hasSubscription && entitlement) {
       if (entitlement.plan === plan) {
         router.push("/search");
         return;
       }
 
-      setError(
-        `Your ${entitlement.plan} subscription is already active. UnderAsk blocks a second Stripe subscription on the same account.`,
-      );
+      setLoadingPlan(plan);
+      try {
+        const update = await changeUnderAskPlan(session.access_token, plan);
+        applyUpdate(update);
+        setNotice(`Your UnderAsk plan is now ${planName(update.plan)}.`);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Could not change plan.");
+      } finally {
+        setLoadingPlan(null);
+      }
       return;
     }
 
@@ -115,9 +159,49 @@ export default function Pricing() {
     }
   }
 
+  async function cancelSubscription() {
+    if (!session || !entitlement) return;
+
+    const confirmed = window.confirm(
+      `Cancel ${planName(entitlement.plan)} at the end of the current billing period? You keep access until then.`,
+    );
+    if (!confirmed) return;
+
+    setError("");
+    setNotice("");
+    setBillingAction("cancel");
+    try {
+      const update = await cancelUnderAskSubscription(session.access_token);
+      applyUpdate(update);
+      setNotice(`Cancellation scheduled. Access stays active until ${dateLabel(update.current_period_end)}.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not cancel subscription.");
+    } finally {
+      setBillingAction(null);
+    }
+  }
+
+  async function keepSubscription() {
+    if (!session) return;
+
+    setError("");
+    setNotice("");
+    setBillingAction("reactivate");
+    try {
+      const update = await reactivateUnderAskSubscription(session.access_token);
+      applyUpdate(update);
+      setNotice("Your UnderAsk subscription will continue normally.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not reactivate subscription.");
+    } finally {
+      setBillingAction(null);
+    }
+  }
+
   const hasSubscription = Boolean(
     entitlement && subscriptionHasAccess(entitlement.subscription_status),
   );
+  const busy = Boolean(loadingPlan || billingAction);
 
   return (
     <main className="shell">
@@ -136,26 +220,61 @@ export default function Pricing() {
           Your UnderAsk subscription is tied to the same account you use for OWN THE WALL.
           Stripe updates your access automatically after payment.
         </p>
+
         {!checking && session && entitlement && (
-          <div className="accountLine">
-            <span>{session.user.email || "OWN THE WALL user"}</span>
-            <span>Current: {entitlement.plan}</span>
-            <span>Status: {entitlement.subscription_status}</span>
-          </div>
+          <>
+            <div className="accountLine">
+              <span>{session.user.email || "OWN THE WALL user"}</span>
+              <span>Current: {planName(entitlement.plan)}</span>
+              <span>Status: {entitlement.subscription_status}</span>
+            </div>
+
+            {hasSubscription && (
+              <div className="subscriptionManager">
+                <div>
+                  <strong>{planName(entitlement.plan)} subscription</strong>
+                  <span>
+                    {entitlement.cancel_at_period_end
+                      ? `Scheduled to end ${dateLabel(entitlement.current_period_end)}`
+                      : `Renews ${dateLabel(entitlement.current_period_end)}`}
+                  </span>
+                </div>
+                {entitlement.cancel_at_period_end ? (
+                  <button
+                    type="button"
+                    className="buttonGhost compactButton"
+                    disabled={busy}
+                    onClick={keepSubscription}
+                  >
+                    {billingAction === "reactivate" ? "Updating..." : "Keep subscription"}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="cancelSubscriptionButton"
+                    disabled={busy}
+                    onClick={cancelSubscription}
+                  >
+                    {billingAction === "cancel" ? "Updating..." : "Cancel at period end"}
+                  </button>
+                )}
+              </div>
+            )}
+          </>
         )}
       </section>
 
+      {notice && <p className="billingNotice">{notice}</p>}
       {error && <p className="error pricingError">{error}</p>}
 
       <section className="pricingGrid">
         {plans.map((plan) => {
           const current = hasSubscription && entitlement?.plan === plan.id;
-          const anotherActivePlan = hasSubscription && !current;
           const loading = loadingPlan === plan.id;
 
           return (
             <article
-              className={`priceCard ${plan.featured ? "featured" : ""}`}
+              className={`priceCard ${plan.featured ? "featured" : ""} ${current ? "currentPlan" : ""}`}
               key={plan.id}
             >
               <div className="source">{plan.name}</div>
@@ -164,17 +283,19 @@ export default function Pricing() {
               <button
                 type="button"
                 className={plan.featured ? "buttonPrimary" : "buttonGhost"}
-                disabled={Boolean(loadingPlan) || anotherActivePlan || checking}
-                onClick={() => startCheckout(plan.id)}
+                disabled={busy || checking}
+                onClick={() => choosePlan(plan.id)}
               >
                 {checking
                   ? "Checking account..."
                   : loading
-                    ? "Opening Stripe..."
+                    ? hasSubscription
+                      ? "Updating plan..."
+                      : "Opening Stripe..."
                     : current
-                      ? "Go to search"
-                      : anotherActivePlan
-                        ? "Existing subscription"
+                      ? "Current plan · go to search"
+                      : hasSubscription
+                        ? `Switch to ${plan.name}`
                         : session
                           ? `Choose ${plan.name}`
                           : "Sign in to subscribe"}
