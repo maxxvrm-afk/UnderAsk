@@ -36,12 +36,31 @@ export async function createUnderAskCheckout(
   return data.url as string;
 }
 
+type SubscriptionStatus =
+  | "inactive"
+  | "trialing"
+  | "active"
+  | "past_due"
+  | "canceled";
+
 export type SubscriptionUpdate = {
   plan: PlanId;
-  subscription_status: string;
+  subscription_status: SubscriptionStatus;
   current_period_end: string | null;
   cancel_at_period_end: boolean;
 };
+
+function normalizeStatus(value: unknown): SubscriptionStatus {
+  if (
+    value === "trialing" ||
+    value === "active" ||
+    value === "past_due" ||
+    value === "canceled"
+  ) {
+    return value;
+  }
+  return "inactive";
+}
 
 async function manageSubscription(
   accessToken: string,
@@ -72,10 +91,7 @@ async function manageSubscription(
       data?.plan === "business"
         ? data.plan
         : "scout",
-    subscription_status:
-      typeof data?.subscription_status === "string"
-        ? data.subscription_status
-        : "active",
+    subscription_status: normalizeStatus(data?.subscription_status),
     current_period_end:
       typeof data?.current_period_end === "string"
         ? data.current_period_end
