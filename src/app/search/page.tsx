@@ -2,10 +2,12 @@
 
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { SEARCH_PLAN_RULES, type PlanId } from "@/lib/searchPlans";
 import {
-  SEARCH_PLAN_RULES,
-  type PlanId,
-} from "@/lib/searchPlans";
+  fetchUnderAskEntitlement,
+  getValidOwnTheWallSession,
+  signOutOwnTheWall,
+} from "@/lib/ownTheWallAuth";
 
 const SITE_OPTIONS = [
   { id: "marktplaats", label: "Marktplaats" },
@@ -18,12 +20,13 @@ const SITE_OPTIONS = [
   { id: "autoscout24", label: "AutoScout24" },
 ];
 
-// Temporary until authenticated subscription status is added.
-const ACTIVE_PLAN: PlanId = "scout";
-
 export default function SearchPage() {
   const router = useRouter();
-  const planRule = SEARCH_PLAN_RULES[ACTIVE_PLAN];
+  const [plan, setPlan] = useState<PlanId>("scout");
+  const [subscriptionStatus, setSubscriptionStatus] = useState("inactive");
+  const [accountReady, setAccountReady] = useState(false);
+  const [accessToken, setAccessToken] = useState("");
+  const [accountEmail, setAccountEmail] = useState("");
   const [query, setQuery] = useState("");
   const [minRoi, setMinRoi] = useState("");
   const [minScore, setMinScore] = useState("");
@@ -33,11 +36,41 @@ export default function SearchPage() {
   const [progress, setProgress] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  const planRule = SEARCH_PLAN_RULES[plan];
+
   useEffect(() => {
+    let mounted = true;
+
+    async function loadAccount() {
+      try {
+        const session = await getValidOwnTheWallSession();
+        if (!session) {
+          router.replace("/login");
+          return;
+        }
+
+        const entitlement = await fetchUnderAskEntitlement(session.access_token);
+        if (!mounted) return;
+
+        setPlan(entitlement.plan);
+        setSubscriptionStatus(entitlement.subscription_status);
+        setAccessToken(session.access_token);
+        setAccountEmail(session.user.email || "OWN THE WALL user");
+        setAccountReady(true);
+      } catch {
+        if (!mounted) return;
+        signOutOwnTheWall();
+        router.replace("/login");
+      }
+    }
+
+    loadAccount();
+
     return () => {
+      mounted = false;
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, []);
+  }, [router]);
 
   function startProgress() {
     setProgress(4);
@@ -67,11 +100,16 @@ export default function SearchPage() {
     });
   }
 
+  function logout() {
+    signOutOwnTheWall();
+    router.replace("/login");
+  }
+
   async function search(e: FormEvent) {
     e.preventDefault();
 
     const cleanQuery = query.trim();
-    if (!cleanQuery || loading) return;
+    if (!cleanQuery || loading || !accessToken) return;
 
     if (preferredSites.length < planRule.minSites) {
       setError(
@@ -90,17 +128,26 @@ export default function SearchPage() {
     try {
       const response = await fetch("/api/search/deals", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
         body: JSON.stringify({
           query: cleanQuery,
           minRoi: Number.isFinite(roiValue) ? roiValue : null,
           minScore: Number.isFinite(scoreValue) ? scoreValue : null,
           preferredSites,
-          plan: ACTIVE_PLAN,
         }),
       });
 
       const data = await response.json();
+
+      if (response.status === 401) {
+        signOutOwnTheWall();
+        router.replace("/login");
+        return;
+      }
+
       if (!response.ok) throw new Error(data.error || "Search failed.");
 
       stopProgress();
@@ -118,7 +165,7 @@ export default function SearchPage() {
             preferredSites: SITE_OPTIONS.filter((site) =>
               preferredSites.includes(site.id),
             ).map((site) => site.label),
-            plan: planRule.name,
+            plan: data?.meta?.plan || planRule.name,
           },
           searchedAt: Date.now(),
         }),
@@ -143,6 +190,20 @@ export default function SearchPage() {
     return "Deals ready.";
   }
 
+  if (!accountReady) {
+    return (
+      <main className="shell">
+        <nav className="nav">
+          <a className="brand" href="/">UnderAsk</a>
+        </nav>
+        <section className="searchHero">
+          <div className="eyebrow">OWN THE WALL ACCOUNT</div>
+          <h1>Loading your access.</h1>
+        </section>
+      </main>
+    );
+  }
+
   const activePreferenceCount =
     (minRoi !== "" ? 1 : 0) +
     (minScore !== "" ? 1 : 0) +
@@ -158,19 +219,25 @@ export default function SearchPage() {
     <main className="shell">
       <nav className="nav">
         <a className="brand" href="/">UnderAsk</a>
-        <div className="navLinks">
-          <a href="/search">Search</a>
+        <div className="navLinks accountNav">
           <a href="/pricing">Pricing</a>
+          <span className="planBadge">{planRule.name}</span>
+          <button type="button" className="navButton" onClick={logout}>Sign out</button>
         </div>
       </nav>
 
       <section className="searchHero">
-        <div className="eyebrow">AI DEAL INTELLIGENCE</div>
+        <div className="eyebrow">AI DEAL INTELLIGENCE · {planRule.name.toUpperCase()}</div>
         <h1>Tell UnderAsk what deal you want.</h1>
         <p className="lede small">
           It searches the web, verifies market value, calculates ROI and ranks
           the strongest opportunities.
         </p>
+        <div className="accountLine">
+          <span>{accountEmail}</span>
+          <span>Identity: OWN THE WALL</span>
+          <span>Status: {subscriptionStatus}</span>
+        </div>
 
         <form onSubmit={search}>
           <div className="searchBox">
@@ -210,7 +277,17 @@ export default function SearchPage() {
                 <label className="filterField">
                   <span>MINIMUM ROI</span>
                   <div className="numberInputWrap">
-                    <input type="number" min="0" max="1000" step="5" inputMode="numeric" placeholder="Any" value={minRoi} disabled={loading} onChange={(e) => setMinRoi(e.target.value)} />
+                    <input
+                      type="number"
+                      min="0"
+                      max="1000"
+                      step="5"
+                      inputMode="numeric"
+                      placeholder="Any"
+                      value={minRoi}
+                      disabled={loading}
+                      onChange={(e) => setMinRoi(e.target.value)}
+                    />
                     <b>%</b>
                   </div>
                   <small>Only show deals that clear this ROI.</small>
@@ -219,7 +296,17 @@ export default function SearchPage() {
                 <label className="filterField">
                   <span>MINIMUM AI SCORE</span>
                   <div className="numberInputWrap">
-                    <input type="number" min="0" max="100" step="5" inputMode="numeric" placeholder="Any" value={minScore} disabled={loading} onChange={(e) => setMinScore(e.target.value)} />
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="5"
+                      inputMode="numeric"
+                      placeholder="Any"
+                      value={minScore}
+                      disabled={loading}
+                      onChange={(e) => setMinScore(e.target.value)}
+                    />
                     <b>/100</b>
                   </div>
                   <small>UnderAsk filters by its final deal score.</small>
@@ -237,7 +324,13 @@ export default function SearchPage() {
                     </p>
                   </div>
                   {preferredSites.length > 0 && planRule.minSites === 0 && (
-                    <button type="button" className="clearSites" onClick={() => setPreferredSites([])}>Clear</button>
+                    <button
+                      type="button"
+                      className="clearSites"
+                      onClick={() => setPreferredSites([])}
+                    >
+                      Clear
+                    </button>
                   )}
                 </div>
 
@@ -280,7 +373,14 @@ export default function SearchPage() {
             "Find cheap Polo 9N3 GTI parts in Europe",
             "I have €500. Find the best things to flip",
           ].map((example) => (
-            <button key={example} type="button" disabled={loading} onClick={() => setQuery(example)}>{example}</button>
+            <button
+              key={example}
+              type="button"
+              disabled={loading}
+              onClick={() => setQuery(example)}
+            >
+              {example}
+            </button>
           ))}
         </div>
 
@@ -294,10 +394,19 @@ export default function SearchPage() {
             <div className="eyebrow">UNDERASK LIVE SEARCH</div>
             <h2>Finding your best deals.</h2>
             <p>{progressLabel()}</p>
-            <div className="progressTrack" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}>
+            <div
+              className="progressTrack"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={progress}
+            >
               <div className="progressFill" style={{ width: `${progress}%` }} />
             </div>
-            <div className="progressMeta"><span>LIVE WEB SEARCH</span><strong>{progress}%</strong></div>
+            <div className="progressMeta">
+              <span>LIVE WEB SEARCH</span>
+              <strong>{progress}%</strong>
+            </div>
             <div className="searchQueryPreview">“{query.trim()}”</div>
           </div>
         </div>
