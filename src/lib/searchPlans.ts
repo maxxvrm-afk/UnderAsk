@@ -42,5 +42,5 @@ export const SEARCH_PLAN_RULES: Record<PlanId, SearchPlanRule> = {
 export function normalizePlan(value: unknown): PlanId {
   return value === "scout" || value === "pro" || value === "multi-pro" || value === "business"
     ? value
-    : "business";
+    : "scout";
 }
