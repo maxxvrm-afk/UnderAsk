@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import styles from "@/app/account.module.css";
 import {
   getValidOwnTheWallSession,
   signInWithOwnTheWall,
@@ -49,7 +50,7 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="shell loginShell">
+    <main className={`shell ${styles.loginShell}`}>
       <nav className="nav">
         <a className="brand" href="/">UnderAsk</a>
         <div className="navLinks">
@@ -58,8 +59,8 @@ export default function LoginPage() {
         </div>
       </nav>
 
-      <section className="loginLayout">
-        <div className="loginIntro">
+      <section className={styles.loginLayout}>
+        <div className={styles.loginIntro}>
           <div className="eyebrow">ONE ACCOUNT · TWO PRODUCTS</div>
           <h1>Use your OWN THE WALL account.</h1>
           <p className="lede small">
@@ -68,12 +69,12 @@ export default function LoginPage() {
           </p>
         </div>
 
-        <div className="loginCard">
+        <div className={styles.loginCard}>
           <span className="source">OWN THE WALL ACCOUNT</span>
           <h2>{checking ? "Checking session..." : "Sign in"}</h2>
 
           {!checking && (
-            <form onSubmit={submit} className="loginForm">
+            <form onSubmit={submit} className={styles.loginForm}>
               <label>
                 <span>EMAIL</span>
                 <input
@@ -98,7 +99,7 @@ export default function LoginPage() {
                 />
               </label>
 
-              {error && <p className="error loginError">{error}</p>}
+              {error && <p className={`error ${styles.loginError}`}>{error}</p>}
 
               <button className="buttonPrimary" type="submit" disabled={loading}>
                 {loading ? "Signing in..." : "Continue to UnderAsk"}
@@ -106,7 +107,7 @@ export default function LoginPage() {
             </form>
           )}
 
-          <p className="loginFootnote">
+          <p className={styles.loginFootnote}>
             This is the same login used by OWN THE WALL. UnderAsk never receives
             your password; authentication is handled by the shared account service.
           </p>
