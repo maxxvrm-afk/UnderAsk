@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { normalizePlan, SEARCH_PLAN_RULES } from "@/lib/searchPlans";
+import { OTW_PUBLISHABLE_KEY, OTW_SUPABASE_URL } from "@/lib/ownTheWallConfig";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -76,11 +77,33 @@ class OpenAIError extends Error {
   }
 }
 
+class AuthError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
 export async function POST(req: NextRequest) {
   const key = process.env.OPENAI_API_KEY;
   if (!key) {
     return NextResponse.json(
       { error: "Add OPENAI_API_KEY in Vercel to activate live search." },
+      { status: 503 },
+    );
+  }
+
+  let entitlement: Awaited<ReturnType<typeof getEntitlement>>;
+  try {
+    entitlement = await getEntitlement(req);
+  } catch (error) {
+    if (error instanceof AuthError) {
+      return NextResponse.json({ error: error.message }, { status: error.status });
+    }
+    return NextResponse.json(
+      { error: "Could not verify your OWN THE WALL account." },
       { status: 503 },
     );
   }
@@ -100,8 +123,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const plan = normalizePlan(body?.plan);
-  const planRule = SEARCH_PLAN_RULES[plan];
+  const planRule = SEARCH_PLAN_RULES[entitlement.plan];
   const preferredSites: string[] = Array.isArray(body?.preferredSites)
     ? [
         ...new Set<string>(
@@ -115,14 +137,18 @@ export async function POST(req: NextRequest) {
 
   if (preferredSites.length < planRule.minSites) {
     return NextResponse.json(
-      { error: `${planRule.name} requires at least ${planRule.minSites} marketplace to be selected.` },
+      {
+        error: `${planRule.name} requires at least ${planRule.minSites} marketplace${planRule.minSites === 1 ? "" : "s"} to be selected.`,
+      },
       { status: 400 },
     );
   }
 
   if (planRule.maxSites !== null && preferredSites.length > planRule.maxSites) {
     return NextResponse.json(
-      { error: `${planRule.name} allows up to ${planRule.maxSites} selected marketplace${planRule.maxSites === 1 ? "" : "s"}.` },
+      {
+        error: `${planRule.name} allows up to ${planRule.maxSites} selected marketplace${planRule.maxSites === 1 ? "" : "s"}.`,
+      },
       { status: 400 },
     );
   }
@@ -136,9 +162,15 @@ export async function POST(req: NextRequest) {
     : `No marketplace preference is selected. Search broadly across the public web and use the strongest verifiable sources you can find.`;
 
   const thresholdText = [
-    minRoi !== null ? `Target deals likely to achieve at least ${minRoi}% server-calculated ROI.` : "",
-    minScore !== null ? `Favor exceptionally strong opportunities because the final server deal-score threshold is ${minScore}/100.` : "",
-  ].filter(Boolean).join("\n");
+    minRoi !== null
+      ? `Target deals likely to achieve at least ${minRoi}% server-calculated ROI.`
+      : "",
+    minScore !== null
+      ? `Favor exceptionally strong opportunities because the final server deal-score threshold is ${minScore}/100.`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   const prompt = `You are UnderAsk, a deal-finding engine.
 Search the live public web for REAL second-hand or marketplace listings matching:
@@ -184,12 +216,14 @@ RULES:
       meta: {
         model: MODEL,
         result_count: deals.length,
-        scoring_version: "v1.3",
+        scoring_version: "v1.4",
         plan: planRule.name,
+        subscription_status: entitlement.subscriptionStatus,
         min_roi: minRoi,
         min_score: minScore,
         preferred_sites: preferredLabels,
         broad_web_search: true,
+        identity_source: "OWN THE WALL",
       },
     });
   } catch (e: any) {
@@ -203,24 +237,80 @@ RULES:
     if (e instanceof OpenAIError) {
       if (e.status === 429) {
         return NextResponse.json(
-          { error: "Search capacity is busy right now. Please retry in about 30–60 seconds." },
+          {
+            error:
+              "Search capacity is busy right now. Please retry in about 30–60 seconds.",
+          },
           { status: 429 },
         );
       }
 
       if (e.status === 401 || e.status === 403) {
         return NextResponse.json(
-          { error: "UnderAsk's search connection is not configured correctly. Check the OpenAI API key and model access in Vercel." },
+          {
+            error:
+              "UnderAsk's search connection is not configured correctly. Check the OpenAI API key and model access in Vercel.",
+          },
           { status: 503 },
         );
       }
     }
 
     return NextResponse.json(
-      { error: "UnderAsk could not complete this search. Try again or use a slightly narrower request." },
+      {
+        error:
+          "UnderAsk could not complete this search. Try again or use a slightly narrower request.",
+      },
       { status: 500 },
     );
   }
+}
+
+async function getEntitlement(req: NextRequest) {
+  const authorization = req.headers.get("authorization") || "";
+  const token = authorization.startsWith("Bearer ")
+    ? authorization.slice(7).trim()
+    : "";
+
+  if (!token) {
+    throw new AuthError(401, "Sign in with your OWN THE WALL account first.");
+  }
+
+  const response = await fetch(
+    `${OTW_SUPABASE_URL}/rest/v1/underask_entitlements?select=plan,subscription_status,current_period_end&limit=1`,
+    {
+      headers: {
+        apikey: OTW_PUBLISHABLE_KEY,
+        Authorization: `Bearer ${token}`,
+      },
+      cache: "no-store",
+    },
+  );
+
+  if (response.status === 401 || response.status === 403) {
+    throw new AuthError(401, "Your OWN THE WALL session expired. Sign in again.");
+  }
+
+  if (!response.ok) {
+    throw new AuthError(503, "Could not load your UnderAsk plan from OWN THE WALL.");
+  }
+
+  const rows = await response.json();
+  const row = Array.isArray(rows) ? rows[0] : null;
+  const storedPlan = normalizePlan(row?.plan);
+  const subscriptionStatus =
+    typeof row?.subscription_status === "string"
+      ? row.subscription_status
+      : "inactive";
+
+  const plan =
+    storedPlan === "scout" ||
+    subscriptionStatus === "active" ||
+    subscriptionStatus === "trialing"
+      ? storedPlan
+      : "scout";
+
+  return { plan, subscriptionStatus };
 }
 
 async function openai(key: string, prompt: string) {
@@ -253,15 +343,27 @@ async function openai(key: string, prompt: string) {
 
     const raw = await r.text();
     let detail: any = null;
-    try { detail = JSON.parse(raw); } catch { detail = null; }
+    try {
+      detail = JSON.parse(raw);
+    } catch {
+      detail = null;
+    }
 
-    const code = typeof detail?.error?.code === "string" ? detail.error.code : `HTTP_${r.status}`;
-    const message = typeof detail?.error?.message === "string" ? detail.error.message : `OpenAI request failed with status ${r.status}`;
+    const code =
+      typeof detail?.error?.code === "string"
+        ? detail.error.code
+        : `HTTP_${r.status}`;
+    const message =
+      typeof detail?.error?.message === "string"
+        ? detail.error.message
+        : `OpenAI request failed with status ${r.status}`;
 
     if (r.status === 429 && attempt < 2) {
       const retryAfter = Number(r.headers.get("retry-after"));
       const fallbackMs = 1500 * Math.pow(2, attempt);
-      const retryMs = Number.isFinite(retryAfter) ? Math.min(retryAfter * 1000, 7000) : Math.min(fallbackMs, 7000);
+      const retryMs = Number.isFinite(retryAfter)
+        ? Math.min(retryAfter * 1000, 7000)
+        : Math.min(fallbackMs, 7000);
       await new Promise((resolve) => setTimeout(resolve, retryMs));
       continue;
     }
@@ -273,11 +375,18 @@ async function openai(key: string, prompt: string) {
 }
 
 function outputText(r: any) {
-  if (typeof r?.output_text === "string" && r.output_text.trim()) return r.output_text.trim();
+  if (typeof r?.output_text === "string" && r.output_text.trim()) {
+    return r.output_text.trim();
+  }
   const parts: string[] = [];
   for (const item of r?.output || []) {
     for (const content of item?.content || []) {
-      if (content?.type === "output_text" && typeof content?.text === "string") parts.push(content.text);
+      if (
+        content?.type === "output_text" &&
+        typeof content?.text === "string"
+      ) {
+        parts.push(content.text);
+      }
     }
   }
   return parts.join("\n").trim();
@@ -286,14 +395,27 @@ function outputText(r: any) {
 function clampOptional(value: unknown, min: number, max: number) {
   if (value === null || value === undefined || value === "") return null;
   const number = Number(value);
-  return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : null;
+  return Number.isFinite(number)
+    ? Math.min(max, Math.max(min, number))
+    : null;
 }
 
-function n(v: any) { const x = Number(v); return Number.isFinite(x) ? x : 0; }
-function s(v: any) { return typeof v === "string" ? v.trim() : ""; }
-function arr(v: any) { return Array.isArray(v) ? v.map(s).filter(Boolean) : []; }
-function clamp(x: number, a: number, b: number) { return Math.min(b, Math.max(a, x)); }
-function r2(x: number) { return Math.round(x * 100) / 100; }
+function n(v: any) {
+  const x = Number(v);
+  return Number.isFinite(x) ? x : 0;
+}
+function s(v: any) {
+  return typeof v === "string" ? v.trim() : "";
+}
+function arr(v: any) {
+  return Array.isArray(v) ? v.map(s).filter(Boolean) : [];
+}
+function clamp(x: number, a: number, b: number) {
+  return Math.min(b, Math.max(a, x));
+}
+function r2(x: number) {
+  return Math.round(x * 100) / 100;
+}
 
 function score(d: any) {
   const title = s(d.title);
@@ -308,18 +430,26 @@ function score(d: any) {
   const confidence = clamp(n(d.confidence), 0, 100);
   const speed = clamp(n(d.speed_to_sell), 0, 100);
 
-  if (!title || !/^https?:\/\//i.test(url) || ask <= 0 || expected <= 0 || quick <= 0) return null;
+  if (
+    !title ||
+    !/^https?:\/\//i.test(url) ||
+    ask <= 0 ||
+    expected <= 0 ||
+    quick <= 0
+  ) {
+    return null;
+  }
 
   const investment = ask + fees + shipping + repair;
   const profit = expected - investment;
   const roi = investment > 0 ? (profit / investment) * 100 : 0;
   const gap = expected > 0 ? ((expected - ask) / expected) * 100 : 0;
-  const total = 100 * (
-    0.38 * clamp(roi / 60, 0, 1) +
-    0.22 * clamp(gap / 45, 0, 1) +
-    0.25 * (confidence / 100) +
-    0.15 * (speed / 100)
-  );
+  const total =
+    100 *
+    (0.38 * clamp(roi / 60, 0, 1) +
+      0.22 * clamp(gap / 45, 0, 1) +
+      0.25 * (confidence / 100) +
+      0.15 * (speed / 100));
 
   return {
     title,
