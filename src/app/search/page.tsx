@@ -1,39 +1,51 @@
 "use client";
 
-import { FormEvent, useState } from "react";
-
-type Deal = {
-  title: string;
-  url: string;
-  source: string;
-  ask_price: number;
-  expected_sale_price: number;
-  quick_sale_price: number;
-  net_profit: number;
-  roi_percent: number;
-  confidence: number;
-  speed_to_sell: number;
-  price_gap_percent: number;
-  deal_score: number;
-  reasoning: string;
-  risks?: string[];
-  evidence?: string[];
-};
+import { FormEvent, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 
 export default function SearchPage() {
+  const router = useRouter();
   const [query, setQuery] = useState("");
-  const [deals, setDeals] = useState<Deal[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [progress, setProgress] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, []);
+
+  function startProgress() {
+    setProgress(4);
+
+    timerRef.current = setInterval(() => {
+      setProgress((current) => {
+        if (current >= 91) return current;
+
+        const step = current < 30 ? 4 : current < 65 ? 2 : 1;
+        return Math.min(91, current + step);
+      });
+    }, 650);
+  }
+
+  function stopProgress() {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  }
 
   async function search(e: FormEvent) {
     e.preventDefault();
 
-    if (!query.trim()) return;
+    const cleanQuery = query.trim();
+    if (!cleanQuery || loading) return;
 
     setLoading(true);
     setError("");
-    setDeals([]);
+    startProgress();
 
     try {
       const response = await fetch("/api/search/deals", {
@@ -41,7 +53,7 @@ export default function SearchPage() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({ query: cleanQuery }),
       });
 
       const data = await response.json();
@@ -50,16 +62,36 @@ export default function SearchPage() {
         throw new Error(data.error || "Search failed.");
       }
 
-      setDeals(data.deals || []);
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Something went wrong."
+      stopProgress();
+      setProgress(100);
+
+      sessionStorage.setItem(
+        "underask:last-search",
+        JSON.stringify({
+          query: cleanQuery,
+          deals: Array.isArray(data.deals) ? data.deals : [],
+          meta: data.meta || null,
+          searchedAt: Date.now(),
+        }),
       );
-    } finally {
+
+      await new Promise((resolve) => setTimeout(resolve, 450));
+      router.push("/results");
+    } catch (err) {
+      stopProgress();
       setLoading(false);
+      setProgress(0);
+      setError(err instanceof Error ? err.message : "Something went wrong.");
     }
+  }
+
+  function progressLabel() {
+    if (progress < 25) return "Searching live listings...";
+    if (progress < 50) return "Checking asking prices...";
+    if (progress < 72) return "Comparing market value...";
+    if (progress < 92) return "Calculating resale potential...";
+    if (progress < 100) return "Ranking the strongest deals...";
+    return "Deals ready.";
   }
 
   return (
@@ -80,9 +112,9 @@ export default function SearchPage() {
 
         <h1>Tell UnderAsk what deal you want.</h1>
 
-        <p>
-          It searches the web, verifies market value, calculates ROI
-          and ranks the strongest opportunities.
+        <p className="lede small">
+          It searches the web, verifies market value, calculates ROI and ranks
+          the strongest opportunities.
         </p>
 
         <form onSubmit={search}>
@@ -91,13 +123,11 @@ export default function SearchPage() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="I have €800. Find deals with at least €200 profit..."
+              disabled={loading}
+              autoFocus
             />
 
-            <button
-              className="buttonPrimary"
-              disabled={loading}
-              type="submit"
-            >
+            <button className="buttonPrimary" disabled={loading} type="submit">
               {loading ? "Searching..." : "Find deals"}
             </button>
           </div>
@@ -112,6 +142,7 @@ export default function SearchPage() {
             <button
               key={example}
               type="button"
+              disabled={loading}
               onClick={() => setQuery(example)}
             >
               {example}
@@ -122,82 +153,40 @@ export default function SearchPage() {
         {error && <p className="error">{error}</p>}
       </section>
 
-      {deals.length > 0 && (
-        <section className="dealGrid">
-          {deals.map((deal, index) => (
-            <article className="dealCard" key={`${deal.url}-${index}`}>
-              <div className="dealTop">
-                <div>
-                  <span className="source">
-                    #{index + 1} · {deal.source}
-                  </span>
+      {loading && (
+        <div className="searchOverlay" role="dialog" aria-modal="true">
+          <div className="searchModal">
+            <div className="searchPulse" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </div>
 
-                  <h2>{deal.title}</h2>
-                </div>
+            <div className="eyebrow">UNDERASK LIVE SEARCH</div>
+            <h2>Finding your best deals.</h2>
+            <p>{progressLabel()}</p>
 
-                <div className="score">
-                  {Math.round(deal.deal_score)}
-                  <span>/100</span>
-                </div>
-              </div>
+            <div
+              className="progressTrack"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={progress}
+            >
+              <div
+                className="progressFill"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
 
-              <div className="metrics">
-                <div>
-                  <span>ASK</span>
-                  <strong>€{deal.ask_price}</strong>
-                </div>
+            <div className="progressMeta">
+              <span>LIVE WEB SEARCH</span>
+              <strong>{progress}%</strong>
+            </div>
 
-                <div>
-                  <span>EXPECTED SALE</span>
-                  <strong>€{deal.expected_sale_price}</strong>
-                </div>
-
-                <div>
-                  <span>NET PROFIT</span>
-                  <strong>€{deal.net_profit}</strong>
-                </div>
-
-                <div>
-                  <span>ROI</span>
-                  <strong>{deal.roi_percent}%</strong>
-                </div>
-
-                <div>
-                  <span>CONFIDENCE</span>
-                  <strong>{deal.confidence}%</strong>
-                </div>
-
-                <div>
-                  <span>SELL SPEED</span>
-                  <strong>{deal.speed_to_sell}/100</strong>
-                </div>
-              </div>
-
-              <p>{deal.reasoning}</p>
-
-              {deal.risks?.[0] && (
-                <p>
-                  <strong>Risk:</strong> {deal.risks[0]}
-                </p>
-              )}
-
-              {deal.evidence?.[0] && (
-                <p>
-                  <strong>Evidence:</strong> {deal.evidence[0]}
-                </p>
-              )}
-
-              <a
-                className="buttonGhost"
-                href={deal.url}
-                target="_blank"
-                rel="noreferrer"
-              >
-                Open listing →
-              </a>
-            </article>
-          ))}
-        </section>
+            <div className="searchQueryPreview">“{query.trim()}”</div>
+          </div>
+        </div>
       )}
     </main>
   );
