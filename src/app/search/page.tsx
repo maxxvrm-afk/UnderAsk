@@ -3,9 +3,23 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
+const SITE_OPTIONS = [
+  { id: "marktplaats", label: "Marktplaats" },
+  { id: "ebay", label: "eBay" },
+  { id: "2dehands", label: "2dehands" },
+  { id: "kleinanzeigen", label: "Kleinanzeigen" },
+  { id: "vinted", label: "Vinted" },
+  { id: "catawiki", label: "Catawiki" },
+  { id: "facebook", label: "Facebook Marketplace" },
+  { id: "autoscout24", label: "AutoScout24" },
+];
+
 export default function SearchPage() {
   const router = useRouter();
   const [query, setQuery] = useState("");
+  const [minRoi, setMinRoi] = useState("");
+  const [minScore, setMinScore] = useState("");
+  const [preferredSites, setPreferredSites] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [progress, setProgress] = useState(0);
@@ -37,11 +51,22 @@ export default function SearchPage() {
     }
   }
 
+  function toggleSite(id: string) {
+    setPreferredSites((current) =>
+      current.includes(id)
+        ? current.filter((site) => site !== id)
+        : [...current, id],
+    );
+  }
+
   async function search(e: FormEvent) {
     e.preventDefault();
 
     const cleanQuery = query.trim();
     if (!cleanQuery || loading) return;
+
+    const roiValue = minRoi === "" ? null : Number(minRoi);
+    const scoreValue = minScore === "" ? null : Number(minScore);
 
     setLoading(true);
     setError("");
@@ -53,7 +78,12 @@ export default function SearchPage() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ query: cleanQuery }),
+        body: JSON.stringify({
+          query: cleanQuery,
+          minRoi: Number.isFinite(roiValue) ? roiValue : null,
+          minScore: Number.isFinite(scoreValue) ? scoreValue : null,
+          preferredSites,
+        }),
       });
 
       const data = await response.json();
@@ -71,6 +101,13 @@ export default function SearchPage() {
           query: cleanQuery,
           deals: Array.isArray(data.deals) ? data.deals : [],
           meta: data.meta || null,
+          filters: {
+            minRoi: roiValue,
+            minScore: scoreValue,
+            preferredSites: SITE_OPTIONS.filter((site) =>
+              preferredSites.includes(site.id),
+            ).map((site) => site.label),
+          },
           searchedAt: Date.now(),
         }),
       );
@@ -93,6 +130,11 @@ export default function SearchPage() {
     if (progress < 100) return "Ranking the strongest deals...";
     return "Deals ready.";
   }
+
+  const activePreferenceCount =
+    (minRoi !== "" ? 1 : 0) +
+    (minScore !== "" ? 1 : 0) +
+    preferredSites.length;
 
   return (
     <main className="shell">
@@ -131,6 +173,104 @@ export default function SearchPage() {
               {loading ? "Searching..." : "Find deals"}
             </button>
           </div>
+
+          <details className="filterMenu">
+            <summary>
+              <div>
+                <strong>Search preferences</strong>
+                <span>Optional · broad web search always stays on</span>
+              </div>
+              <div className="filterSummaryRight">
+                {activePreferenceCount > 0 && (
+                  <span className="filterCount">{activePreferenceCount} active</span>
+                )}
+                <span className="filterChevron" aria-hidden="true">⌄</span>
+              </div>
+            </summary>
+
+            <div className="filterBody">
+              <div className="filterFields">
+                <label className="filterField">
+                  <span>MINIMUM ROI</span>
+                  <div className="numberInputWrap">
+                    <input
+                      type="number"
+                      min="0"
+                      max="1000"
+                      step="5"
+                      inputMode="numeric"
+                      placeholder="Any"
+                      value={minRoi}
+                      disabled={loading}
+                      onChange={(e) => setMinRoi(e.target.value)}
+                    />
+                    <b>%</b>
+                  </div>
+                  <small>Only show deals that clear this ROI.</small>
+                </label>
+
+                <label className="filterField">
+                  <span>MINIMUM AI SCORE</span>
+                  <div className="numberInputWrap">
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="5"
+                      inputMode="numeric"
+                      placeholder="Any"
+                      value={minScore}
+                      disabled={loading}
+                      onChange={(e) => setMinScore(e.target.value)}
+                    />
+                    <b>/100</b>
+                  </div>
+                  <small>UnderAsk filters by its final deal score.</small>
+                </label>
+              </div>
+
+              <div className="sitePreferenceBlock">
+                <div className="sitePreferenceHead">
+                  <div>
+                    <span>PREFERRED SITES</span>
+                    <p>Selected sites get priority, but UnderAsk still searches the rest of the web.</p>
+                  </div>
+                  {preferredSites.length > 0 && (
+                    <button
+                      type="button"
+                      className="clearSites"
+                      onClick={() => setPreferredSites([])}
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+
+                <div className="siteChoices">
+                  {SITE_OPTIONS.map((site) => {
+                    const selected = preferredSites.includes(site.id);
+                    return (
+                      <button
+                        type="button"
+                        key={site.id}
+                        className={selected ? "siteChoice selected" : "siteChoice"}
+                        aria-pressed={selected}
+                        disabled={loading}
+                        onClick={() => toggleSite(site.id)}
+                      >
+                        <span className="siteCheck">{selected ? "✓" : "+"}</span>
+                        {site.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="broadSearchNote">
+                  <strong>Broad search remains active.</strong> No sites selected = search everywhere. Sites selected = search everywhere, with extra priority on those sites.
+                </div>
+              </div>
+            </div>
+          </details>
         </form>
 
         <div className="chips">
