@@ -17,6 +17,7 @@ export type UnderAskEntitlement = {
   plan: PlanId;
   subscription_status: "inactive" | "trialing" | "active" | "past_due" | "canceled";
   current_period_end: string | null;
+  cancel_at_period_end: boolean;
 };
 
 function normalizeSession(data: any): OtwSession {
@@ -96,7 +97,7 @@ export async function getValidOwnTheWallSession(): Promise<OtwSession | null> {
 
 export async function fetchUnderAskEntitlement(accessToken: string): Promise<UnderAskEntitlement> {
   const response = await fetch(
-    `${OTW_SUPABASE_URL}/rest/v1/underask_entitlements?select=plan,subscription_status,current_period_end&limit=1`,
+    `${OTW_SUPABASE_URL}/rest/v1/underask_entitlements?select=plan,subscription_status,current_period_end,cancel_at_period_end&limit=1`,
     {
       headers: {
         apikey: OTW_PUBLISHABLE_KEY,
@@ -123,6 +124,7 @@ export async function fetchUnderAskEntitlement(accessToken: string): Promise<Und
         ? row.subscription_status
         : "inactive",
     current_period_end: typeof row?.current_period_end === "string" ? row.current_period_end : null,
+    cancel_at_period_end: Boolean(row?.cancel_at_period_end),
   };
 }
 
