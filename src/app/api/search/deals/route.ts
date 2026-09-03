@@ -159,7 +159,7 @@ export async function POST(req: NextRequest) {
 
   const preferenceText = preferredLabels.length
     ? `Give extra search priority to these marketplaces: ${preferredLabels.join(", ")}. IMPORTANT: these are preferences, NOT an allowlist. Continue searching the broader public web for stronger listings, market evidence and comparables.`
-    : `No marketplace preference is selected. Search broadly across the public web and use the strongest verifiable sources you can find.`;
+    : "No marketplace preference is selected. Search broadly across the public web and use the strongest verifiable sources you can find.";
 
   const thresholdText = [
     minRoi !== null
@@ -216,7 +216,7 @@ RULES:
       meta: {
         model: MODEL,
         result_count: deals.length,
-        scoring_version: "v1.4",
+        scoring_version: "v1.5",
         plan: planRule.name,
         subscription_status: entitlement.subscriptionStatus,
         min_roi: minRoi,
@@ -297,20 +297,30 @@ async function getEntitlement(req: NextRequest) {
 
   const rows = await response.json();
   const row = Array.isArray(rows) ? rows[0] : null;
-  const storedPlan = normalizePlan(row?.plan);
+  if (!row) {
+    throw new AuthError(402, "Choose an UnderAsk subscription before searching.");
+  }
+
   const subscriptionStatus =
     typeof row?.subscription_status === "string"
       ? row.subscription_status
       : "inactive";
 
-  const plan =
-    storedPlan === "scout" ||
-    subscriptionStatus === "active" ||
-    subscriptionStatus === "trialing"
-      ? storedPlan
-      : "scout";
+  if (
+    subscriptionStatus !== "active" &&
+    subscriptionStatus !== "trialing" &&
+    subscriptionStatus !== "past_due"
+  ) {
+    throw new AuthError(
+      402,
+      "An active UnderAsk subscription is required before searching.",
+    );
+  }
 
-  return { plan, subscriptionStatus };
+  return {
+    plan: normalizePlan(row?.plan),
+    subscriptionStatus,
+  };
 }
 
 async function openai(key: string, prompt: string) {
@@ -378,13 +388,11 @@ function outputText(r: any) {
   if (typeof r?.output_text === "string" && r.output_text.trim()) {
     return r.output_text.trim();
   }
+
   const parts: string[] = [];
   for (const item of r?.output || []) {
     for (const content of item?.content || []) {
-      if (
-        content?.type === "output_text" &&
-        typeof content?.text === "string"
-      ) {
+      if (content?.type === "output_text" && typeof content?.text === "string") {
         parts.push(content.text);
       }
     }
@@ -404,15 +412,19 @@ function n(v: any) {
   const x = Number(v);
   return Number.isFinite(x) ? x : 0;
 }
+
 function s(v: any) {
   return typeof v === "string" ? v.trim() : "";
 }
+
 function arr(v: any) {
   return Array.isArray(v) ? v.map(s).filter(Boolean) : [];
 }
+
 function clamp(x: number, a: number, b: number) {
   return Math.min(b, Math.max(a, x));
 }
+
 function r2(x: number) {
   return Math.round(x * 100) / 100;
 }
