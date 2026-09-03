@@ -8,6 +8,12 @@ import {
   signInWithOwnTheWall,
 } from "@/lib/ownTheWallAuth";
 
+function destination() {
+  if (typeof window === "undefined") return "/search";
+  const next = new URLSearchParams(window.location.search).get("next") || "";
+  return next.startsWith("/") && !next.startsWith("//") ? next : "/search";
+}
+
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
@@ -21,7 +27,7 @@ export default function LoginPage() {
     getValidOwnTheWallSession()
       .then((session) => {
         if (!mounted) return;
-        if (session) router.replace("/search");
+        if (session) router.replace(destination());
         else setChecking(false);
       })
       .catch(() => {
@@ -42,7 +48,7 @@ export default function LoginPage() {
 
     try {
       await signInWithOwnTheWall(email.trim(), password);
-      router.replace("/search");
+      router.replace(destination());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not sign in.");
       setLoading(false);
