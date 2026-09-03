@@ -36,6 +36,69 @@ export async function createUnderAskCheckout(
   return data.url as string;
 }
 
+export type SubscriptionUpdate = {
+  plan: PlanId;
+  subscription_status: string;
+  current_period_end: string | null;
+  cancel_at_period_end: boolean;
+};
+
+async function manageSubscription(
+  accessToken: string,
+  body: Record<string, unknown>,
+): Promise<SubscriptionUpdate> {
+  const response = await fetch(
+    `${OTW_SUPABASE_URL}/functions/v1/underask-manage-subscription`,
+    {
+      method: "POST",
+      headers: {
+        apikey: OTW_PUBLISHABLE_KEY,
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    },
+  );
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data?.error || "Could not update your subscription.");
+  }
+
+  return {
+    plan:
+      data?.plan === "pro" ||
+      data?.plan === "multi-pro" ||
+      data?.plan === "business"
+        ? data.plan
+        : "scout",
+    subscription_status:
+      typeof data?.subscription_status === "string"
+        ? data.subscription_status
+        : "active",
+    current_period_end:
+      typeof data?.current_period_end === "string"
+        ? data.current_period_end
+        : null,
+    cancel_at_period_end: Boolean(data?.cancel_at_period_end),
+  };
+}
+
+export function changeUnderAskPlan(
+  accessToken: string,
+  plan: PlanId,
+) {
+  return manageSubscription(accessToken, { action: "change_plan", plan });
+}
+
+export function cancelUnderAskSubscription(accessToken: string) {
+  return manageSubscription(accessToken, { action: "cancel" });
+}
+
+export function reactivateUnderAskSubscription(accessToken: string) {
+  return manageSubscription(accessToken, { action: "reactivate" });
+}
+
 export function subscriptionHasAccess(status: string) {
   return status === "active" || status === "trialing" || status === "past_due";
 }
