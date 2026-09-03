@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./account-global.css";
 
 export const metadata: Metadata = {
   title: "UnderAsk — The search engine for deals",
