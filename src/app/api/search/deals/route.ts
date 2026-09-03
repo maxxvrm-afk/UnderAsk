@@ -102,8 +102,15 @@ export async function POST(req: NextRequest) {
 
   const plan = normalizePlan(body?.plan);
   const planRule = SEARCH_PLAN_RULES[plan];
-  const preferredSites = Array.isArray(body?.preferredSites)
-    ? [...new Set(body.preferredSites.filter((site: unknown) => typeof site === "string" && SITE_LABELS[site as string]))]
+  const preferredSites: string[] = Array.isArray(body?.preferredSites)
+    ? [
+        ...new Set<string>(
+          body.preferredSites.filter(
+            (site: unknown): site is string =>
+              typeof site === "string" && Boolean(SITE_LABELS[site]),
+          ),
+        ),
+      ]
     : [];
 
   if (preferredSites.length < planRule.minSites) {
