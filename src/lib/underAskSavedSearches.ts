@@ -7,6 +7,9 @@ export type UnderAskSavedSearch = {
   preferredSites: string[];
   minRoi: number | null;
   minScore: number | null;
+  minProfit: number | null;
+  maxAskPrice: number | null;
+  conditionPreference: string;
   alertsEnabled: boolean;
   alertMinScore: number;
   nextCheckAt: string | null;
@@ -23,6 +26,9 @@ export type SaveUnderAskSearchInput = {
   preferredSites?: string[];
   minRoi?: number | null;
   minScore?: number | null;
+  minProfit?: number | null;
+  maxAskPrice?: number | null;
+  conditionPreference?: string | null;
 };
 
 export type UnderAskAlertState = {
@@ -53,6 +59,10 @@ function optionalString(value: unknown) {
   return typeof value === "string" && value ? value : null;
 }
 
+function conditionValue(value: unknown) {
+  return value === "ready" || value === "cosmetic_ok" || value === "repair_ok" ? value : "any";
+}
+
 function normalize(row: any): UnderAskSavedSearch {
   return {
     id: String(row?.id || ""),
@@ -63,6 +73,9 @@ function normalize(row: any): UnderAskSavedSearch {
       : [],
     minRoi: optionalNumber(row?.min_roi),
     minScore: optionalNumber(row?.min_score),
+    minProfit: optionalNumber(row?.min_profit),
+    maxAskPrice: optionalNumber(row?.max_ask_price),
+    conditionPreference: conditionValue(row?.condition_preference),
     alertsEnabled: Boolean(row?.alerts_enabled),
     alertMinScore: optionalNumber(row?.alert_min_score) ?? 70,
     nextCheckAt: optionalString(row?.next_check_at),
@@ -84,6 +97,9 @@ export async function fetchUnderAskSavedSearches(
     "preferred_sites",
     "min_roi",
     "min_score",
+    "min_profit",
+    "max_ask_price",
+    "condition_preference",
     "alerts_enabled",
     "alert_min_score",
     "next_check_at",
@@ -123,6 +139,9 @@ export async function saveUnderAskSearch(
       preferred_sites: Array.isArray(input.preferredSites) ? input.preferredSites : [],
       min_roi: input.minRoi ?? null,
       min_score: input.minScore ?? null,
+      min_profit: input.minProfit ?? null,
+      max_ask_price: input.maxAskPrice ?? null,
+      condition_preference: conditionValue(input.conditionPreference),
     }),
   });
 
