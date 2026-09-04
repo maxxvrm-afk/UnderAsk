@@ -8,10 +8,16 @@ import {
   signUpWithOwnTheWall,
 } from "@/lib/ownTheWallAuth";
 
-function destination() {
-  if (typeof window === "undefined") return "/onboarding";
+function requestedDestination() {
+  if (typeof window === "undefined") return "/pricing";
   const next = new URLSearchParams(window.location.search).get("next") || "";
-  return next.startsWith("/") && !next.startsWith("//") ? next : "/onboarding";
+  return next.startsWith("/") && !next.startsWith("//") ? next : "/pricing";
+}
+
+function onboardingDestination() {
+  const requested = requestedDestination();
+  if (requested.startsWith("/onboarding")) return requested;
+  return `/onboarding?next=${encodeURIComponent(requested)}`;
 }
 
 export default function SignupPage() {
@@ -29,7 +35,7 @@ export default function SignupPage() {
     getValidOwnTheWallSession()
       .then((session) => {
         if (!mounted) return;
-        if (session) router.replace(destination());
+        if (session) router.replace(requestedDestination());
         else setChecking(false);
       })
       .catch(() => {
@@ -63,7 +69,7 @@ export default function SignupPage() {
     setError("");
 
     try {
-      const next = destination();
+      const next = onboardingDestination();
       const redirectTo = `${window.location.origin}/login?verified=1&next=${encodeURIComponent(next)}`;
       const result = await signUpWithOwnTheWall(cleanEmail, password, redirectTo);
 
@@ -80,7 +86,7 @@ export default function SignupPage() {
     }
   }
 
-  const loginHref = `/login?next=${encodeURIComponent(destination())}`;
+  const loginHref = `/login?next=${encodeURIComponent(requestedDestination())}`;
 
   return (
     <main className={`shell ${styles.loginShell}`}>
@@ -115,7 +121,7 @@ export default function SignupPage() {
                 Confirm your email address, then sign in. UnderAsk will take you straight
                 into the short deal-preference setup before you choose a plan.
               </p>
-              <a className="buttonPrimary" href={loginHref}>Go to sign in</a>
+              <a className="buttonPrimary" href={`/login?next=${encodeURIComponent(onboardingDestination())}`}>Go to sign in</a>
             </div>
           ) : !checking ? (
             <>
