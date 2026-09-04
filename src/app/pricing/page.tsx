@@ -15,40 +15,46 @@ import {
   createUnderAskCheckout,
   reactivateUnderAskSubscription,
   subscriptionHasAccess,
+  type BillingInterval,
   type SubscriptionUpdate,
 } from "@/lib/underAskBilling";
 
 const plans: Array<{
   id: PlanId;
   name: string;
-  price: string;
+  monthlyPrice: string;
+  annualPrice: string;
   desc: string;
   featured?: boolean;
 }> = [
   {
     id: "scout",
     name: "Scout",
-    price: "€39",
-    desc: "1 required marketplace · AI deal score · ROI filters",
+    monthlyPrice: "€29.99",
+    annualPrice: "€299",
+    desc: "100 searches · 1 marketplace · 1 Deal Alert after trial",
   },
   {
     id: "pro",
     name: "Pro",
-    price: "€89",
-    desc: "Up to 2 marketplaces · stronger search priority · full AI evidence",
+    monthlyPrice: "€59.99",
+    annualPrice: "€599",
+    desc: "300 searches · up to 2 marketplaces · 3 Deal Alerts after trial",
     featured: true,
   },
   {
     id: "multi-pro",
     name: "Multi Pro",
-    price: "€149",
-    desc: "Up to 3 marketplaces · wider opportunity coverage · arbitrage workflow",
+    monthlyPrice: "€119.99",
+    annualPrice: "€1,199",
+    desc: "750 searches · up to 3 marketplaces · 5 Deal Alerts after trial",
   },
   {
     id: "business",
     name: "Business",
-    price: "€249",
-    desc: "No marketplace required · broad all-web search · maximum search freedom",
+    monthlyPrice: "€249.99",
+    annualPrice: "€2,499",
+    desc: "1,500 searches · broad all-web search · 10 Deal Alerts after trial",
   },
 ];
 
@@ -69,10 +75,15 @@ function dateLabel(value: string | null) {
   }
 }
 
+function intervalName(interval: BillingInterval) {
+  return interval === "year" ? "yearly" : "monthly";
+}
+
 export default function Pricing() {
   const router = useRouter();
   const [session, setSession] = useState<OtwSession | null>(null);
   const [entitlement, setEntitlement] = useState<UnderAskEntitlement | null>(null);
+  const [billingInterval, setBillingInterval] = useState<BillingInterval>("month");
   const [checking, setChecking] = useState(true);
   const [loadingPlan, setLoadingPlan] = useState<PlanId | null>(null);
   const [billingAction, setBillingAction] = useState<"cancel" | "reactivate" | null>(null);
@@ -90,7 +101,12 @@ export default function Pricing() {
 
         if (activeSession) {
           const current = await fetchUnderAskEntitlement(activeSession.access_token);
-          if (mounted) setEntitlement(current);
+          if (mounted) {
+            setEntitlement(current);
+            if (subscriptionHasAccess(current.subscription_status)) {
+              setBillingInterval(current.billing_interval);
+            }
+          }
         }
       } catch {
         if (mounted) {
@@ -109,12 +125,16 @@ export default function Pricing() {
   }, []);
 
   function applyUpdate(update: SubscriptionUpdate) {
-    setEntitlement({
+    setEntitlement((current) => ({
       plan: update.plan,
+      billing_interval: update.billing_interval,
       subscription_status: update.subscription_status,
       current_period_end: update.current_period_end,
+      trial_used_at: current?.trial_used_at || null,
+      trial_end: update.trial_end,
       cancel_at_period_end: update.cancel_at_period_end,
-    });
+    }));
+    setBillingInterval(update.billing_interval);
   }
 
   async function choosePlan(plan: PlanId) {
@@ -131,16 +151,25 @@ export default function Pricing() {
     );
 
     if (hasSubscription && entitlement) {
-      if (entitlement.plan === plan) {
+      if (
+        entitlement.plan === plan &&
+        entitlement.billing_interval === billingInterval
+      ) {
         router.push("/search");
         return;
       }
 
       setLoadingPlan(plan);
       try {
-        const update = await changeUnderAskPlan(session.access_token, plan);
+        const update = await changeUnderAskPlan(
+          session.access_token,
+          plan,
+          billingInterval,
+        );
         applyUpdate(update);
-        setNotice(`Your UnderAsk plan is now ${planName(update.plan)}.`);
+        setNotice(
+          `Your UnderAsk subscription is now ${planName(update.plan)} · ${intervalName(update.billing_interval)}.`,
+        );
       } catch (err) {
         setError(err instanceof Error ? err.message : "Could not change plan.");
       } finally {
@@ -151,7 +180,11 @@ export default function Pricing() {
 
     setLoadingPlan(plan);
     try {
-      const url = await createUnderAskCheckout(session.access_token, plan);
+      const url = await createUnderAskCheckout(
+        session.access_token,
+        plan,
+        billingInterval,
+      );
       window.location.assign(url);
     } catch (err) {
       setLoadingPlan(null);
@@ -163,7 +196,9 @@ export default function Pricing() {
     if (!session || !entitlement) return;
 
     const confirmed = window.confirm(
-      `Cancel ${planName(entitlement.plan)} at the end of the current billing period? You keep access until then.`,
+      entitlement.subscription_status === "trialing"
+        ? "Cancel your UnderAsk trial before it becomes paid?"
+        : `Cancel ${planName(entitlement.plan)} at the end of the current billing period? You keep access until then.`,
     );
     if (!confirmed) return;
 
@@ -173,7 +208,11 @@ export default function Pricing() {
     try {
       const update = await cancelUnderAskSubscription(session.access_token);
       applyUpdate(update);
-      setNotice(`Cancellation scheduled. Access stays active until ${dateLabel(update.current_period_end)}.`);
+      setNotice(
+        entitlement.subscription_status === "trialing"
+          ? `Cancellation scheduled. Your trial stays available until ${dateLabel(update.current_period_end || update.trial_end)}.`
+          : `Cancellation scheduled. Access stays active until ${dateLabel(update.current_period_end)}.`,
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not cancel subscription.");
     } finally {
@@ -201,6 +240,8 @@ export default function Pricing() {
   const hasSubscription = Boolean(
     entitlement && subscriptionHasAccess(entitlement.subscription_status),
   );
+  const trialEligible = !entitlement?.trial_used_at && !hasSubscription;
+  const isTrialing = entitlement?.subscription_status === "trialing";
   const busy = Boolean(loadingPlan || billingAction);
 
   return (
@@ -214,12 +255,42 @@ export default function Pricing() {
       </nav>
 
       <section className="searchHero pricingHero">
-        <div className="eyebrow">LIVE STRIPE SUBSCRIPTIONS</div>
+        <div className="eyebrow">7-DAY FREE TRIAL · 10 SEARCHES</div>
         <h1>Choose your edge.</h1>
         <p className="lede small">
-          Your UnderAsk subscription is tied to the same account you use for OWN THE WALL.
-          Stripe updates your access automatically after payment.
+          New accounts get one 7-day free trial with up to 10 live searches.
+          A payment method is required; cancel before the trial ends and you will not be charged.
         </p>
+
+        <div
+          role="group"
+          aria-label="Billing interval"
+          style={{
+            display: "inline-flex",
+            gap: 6,
+            padding: 5,
+            border: "1px solid rgba(255,255,255,.12)",
+            borderRadius: 999,
+            marginTop: 18,
+          }}
+        >
+          <button
+            type="button"
+            className={billingInterval === "month" ? "buttonPrimary compactButton" : "buttonGhost compactButton"}
+            disabled={busy}
+            onClick={() => setBillingInterval("month")}
+          >
+            Monthly
+          </button>
+          <button
+            type="button"
+            className={billingInterval === "year" ? "buttonPrimary compactButton" : "buttonGhost compactButton"}
+            disabled={busy}
+            onClick={() => setBillingInterval("year")}
+          >
+            Yearly · 2 months free
+          </button>
+        </div>
 
         {!checking && session && entitlement && (
           <>
@@ -227,16 +298,23 @@ export default function Pricing() {
               <span>{session.user.email || "OWN THE WALL user"}</span>
               <span>Current: {planName(entitlement.plan)}</span>
               <span>Status: {entitlement.subscription_status}</span>
+              {hasSubscription && <span>Billing: {intervalName(entitlement.billing_interval)}</span>}
             </div>
 
             {hasSubscription && (
               <div className="subscriptionManager">
                 <div>
-                  <strong>{planName(entitlement.plan)} subscription</strong>
+                  <strong>
+                    {isTrialing
+                      ? `${planName(entitlement.plan)} free trial`
+                      : `${planName(entitlement.plan)} subscription`}
+                  </strong>
                   <span>
-                    {entitlement.cancel_at_period_end
-                      ? `Scheduled to end ${dateLabel(entitlement.current_period_end)}`
-                      : `Renews ${dateLabel(entitlement.current_period_end)}`}
+                    {isTrialing
+                      ? `Trial ends ${dateLabel(entitlement.trial_end || entitlement.current_period_end)} · max 10 searches`
+                      : entitlement.cancel_at_period_end
+                        ? `Scheduled to end ${dateLabel(entitlement.current_period_end)}`
+                        : `Renews ${dateLabel(entitlement.current_period_end)}`}
                   </span>
                 </div>
                 {entitlement.cancel_at_period_end ? (
@@ -255,7 +333,11 @@ export default function Pricing() {
                     disabled={busy}
                     onClick={cancelSubscription}
                   >
-                    {billingAction === "cancel" ? "Updating..." : "Cancel at period end"}
+                    {billingAction === "cancel"
+                      ? "Updating..."
+                      : isTrialing
+                        ? "Cancel trial"
+                        : "Cancel at period end"}
                   </button>
                 )}
               </div>
@@ -269,16 +351,28 @@ export default function Pricing() {
 
       <section className="pricingGrid">
         {plans.map((plan) => {
-          const current = hasSubscription && entitlement?.plan === plan.id;
+          const current = Boolean(
+            hasSubscription &&
+            entitlement?.plan === plan.id &&
+            entitlement?.billing_interval === billingInterval,
+          );
           const loading = loadingPlan === plan.id;
+          const price = billingInterval === "year" ? plan.annualPrice : plan.monthlyPrice;
 
           return (
             <article
               className={`priceCard ${plan.featured ? "featured" : ""} ${current ? "currentPlan" : ""}`}
               key={plan.id}
             >
-              <div className="source">{plan.name}</div>
-              <div className="price">{plan.price}<span>/mo</span></div>
+              <div className="source">
+                {plan.name}{plan.featured ? " · MOST POPULAR" : ""}
+              </div>
+              <div className="price">
+                {price}<span>/{billingInterval === "year" ? "yr" : "mo"}</span>
+              </div>
+              {billingInterval === "year" && (
+                <p style={{ marginTop: -6, opacity: .7, fontSize: 12 }}>About 2 months free vs monthly</p>
+              )}
               <p>{plan.desc}</p>
               <button
                 type="button"
@@ -290,20 +384,26 @@ export default function Pricing() {
                   ? "Checking account..."
                   : loading
                     ? hasSubscription
-                      ? "Updating plan..."
+                      ? "Updating subscription..."
                       : "Opening Stripe..."
                     : current
                       ? "Current plan · go to search"
                       : hasSubscription
                         ? `Switch to ${plan.name}`
                         : session
-                          ? `Choose ${plan.name}`
-                          : "Sign in to subscribe"}
+                          ? trialEligible
+                            ? `Start 7-day free trial`
+                            : `Subscribe to ${plan.name}`
+                          : "Sign in to start free trial"}
               </button>
             </article>
           );
         })}
       </section>
+
+      <p className="lede small" style={{ textAlign: "center", margin: "24px auto 0", maxWidth: 760 }}>
+        Free trial is available once per account. Trial includes up to 10 manual searches; Deal Alerts unlock after the paid subscription starts.
+      </p>
     </main>
   );
 }
