@@ -1,5 +1,6 @@
 import { OTW_PUBLISHABLE_KEY, OTW_SUPABASE_URL } from "@/lib/ownTheWallConfig";
 import type { PlanId } from "@/lib/searchPlans";
+import type { BillingInterval } from "@/lib/underAskBilling";
 
 const SESSION_KEY = "underask:otw-session";
 
@@ -15,8 +16,11 @@ export type OtwSession = {
 
 export type UnderAskEntitlement = {
   plan: PlanId;
+  billing_interval: BillingInterval;
   subscription_status: "inactive" | "trialing" | "active" | "past_due" | "canceled";
   current_period_end: string | null;
+  trial_used_at: string | null;
+  trial_end: string | null;
   cancel_at_period_end: boolean;
 };
 
@@ -146,7 +150,7 @@ export async function getValidOwnTheWallSession(): Promise<OtwSession | null> {
 
 export async function fetchUnderAskEntitlement(accessToken: string): Promise<UnderAskEntitlement> {
   const response = await fetch(
-    `${OTW_SUPABASE_URL}/rest/v1/underask_entitlements?select=plan,subscription_status,current_period_end,cancel_at_period_end&limit=1`,
+    `${OTW_SUPABASE_URL}/rest/v1/underask_entitlements?select=plan,billing_interval,subscription_status,current_period_end,trial_used_at,trial_end,cancel_at_period_end&limit=1`,
     {
       headers: {
         apikey: OTW_PUBLISHABLE_KEY,
@@ -165,6 +169,7 @@ export async function fetchUnderAskEntitlement(accessToken: string): Promise<Und
       row?.plan === "pro" || row?.plan === "multi-pro" || row?.plan === "business"
         ? row.plan
         : "scout",
+    billing_interval: row?.billing_interval === "year" ? "year" : "month",
     subscription_status:
       row?.subscription_status === "trialing" ||
       row?.subscription_status === "active" ||
@@ -173,6 +178,8 @@ export async function fetchUnderAskEntitlement(accessToken: string): Promise<Und
         ? row.subscription_status
         : "inactive",
     current_period_end: typeof row?.current_period_end === "string" ? row.current_period_end : null,
+    trial_used_at: typeof row?.trial_used_at === "string" ? row.trial_used_at : null,
+    trial_end: typeof row?.trial_end === "string" ? row.trial_end : null,
     cancel_at_period_end: Boolean(row?.cancel_at_period_end),
   };
 }
