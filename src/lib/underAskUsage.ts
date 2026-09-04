@@ -28,6 +28,12 @@ function normalizePlan(value: unknown): PlanId {
     : "scout";
 }
 
+function nullableNumber(value: unknown) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
 function authHeaders(accessToken: string) {
   return {
     apikey: OTW_PUBLISHABLE_KEY,
@@ -96,11 +102,11 @@ export async function fetchUnderAskSearchHistory(
     preferredSites: Array.isArray(row?.preferred_sites)
       ? row.preferred_sites.filter((site: unknown): site is string => typeof site === "string")
       : [],
-    minRoi: Number.isFinite(Number(row?.min_roi)) ? Number(row.min_roi) : null,
-    minScore: Number.isFinite(Number(row?.min_score)) ? Number(row.min_score) : null,
+    minRoi: nullableNumber(row?.min_roi),
+    minScore: nullableNumber(row?.min_score),
     status:
       row?.status === "completed" || row?.status === "failed" ? row.status : "started",
-    resultCount: Number.isFinite(Number(row?.result_count)) ? Number(row.result_count) : null,
+    resultCount: nullableNumber(row?.result_count),
     errorCode: typeof row?.error_code === "string" ? row.error_code : null,
     createdAt: typeof row?.created_at === "string" ? row.created_at : "",
   }));
