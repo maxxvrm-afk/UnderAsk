@@ -19,6 +19,13 @@ const SITE_LABELS: Record<string, string> = {
   autoscout24: "AutoScout24",
 };
 
+const CONDITION_LABELS: Record<string, string> = {
+  any: "Any condition is acceptable if the economics are strong.",
+  ready: "Prefer working, complete items that need no meaningful repair before resale. Exclude broken/parts-only projects.",
+  cosmetic_ok: "Working items with cosmetic wear, scratches or easy detailing work are acceptable, but avoid meaningful mechanical/electronic repair projects.",
+  repair_ok: "Repair projects and damaged items are acceptable when the likely repair cost is included conservatively and the margin still works.",
+};
+
 const DEAL_SCHEMA = {
   type: "object",
   properties: {
@@ -181,11 +188,27 @@ export async function POST(req: NextRequest) {
 
   const minRoi = clampOptional(body?.minRoi, 0, 1000);
   const minScore = clampOptional(body?.minScore, 0, 100);
+  const minProfit = clampOptional(body?.minProfit, 0, 1_000_000);
+  const maxAskPrice = clampOptional(body?.maxAskPrice, 0, 1_000_000);
+  const rawCondition = typeof body?.conditionPreference === "string" ? body.conditionPreference : "any";
+  if (!CONDITION_LABELS[rawCondition]) {
+    return NextResponse.json({ error: "Choose a valid condition preference." }, { status: 400 });
+  }
+  const conditionPreference = rawCondition;
   const preferredLabels = preferredSites.map((site) => SITE_LABELS[site]);
 
   let usage: SearchUsage;
   try {
-    usage = await reserveSearch(req, query, preferredSites, minRoi, minScore);
+    usage = await reserveSearch(
+      req,
+      query,
+      preferredSites,
+      minRoi,
+      minScore,
+      minProfit,
+      maxAskPrice,
+      conditionPreference,
+    );
   } catch (error) {
     if (error instanceof AuthError) {
       return NextResponse.json({ error: error.message }, { status: error.status });
@@ -244,6 +267,13 @@ export async function POST(req: NextRequest) {
     minScore !== null
       ? `Favor exceptionally strong opportunities because the final server deal-score threshold is ${minScore}/100.`
       : "",
+    minProfit !== null
+      ? `Target deals likely to produce at least €${minProfit} server-calculated NET profit after estimated fees, shipping and repair.`
+      : "",
+    maxAskPrice !== null
+      ? `The candidate listing purchase/asking price must be no more than €${maxAskPrice}.`
+      : "",
+    `CONDITION PREFERENCE: ${CONDITION_LABELS[conditionPreference]}`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -287,6 +317,8 @@ QUALITY STANDARD:
     const deals = qualityDeals
       .filter((d: any) => minRoi === null || d.roi_percent >= minRoi)
       .filter((d: any) => minScore === null || d.deal_score >= minScore)
+      .filter((d: any) => minProfit === null || d.net_profit >= minProfit)
+      .filter((d: any) => maxAskPrice === null || d.ask_price <= maxAskPrice)
       .sort((a: any, b: any) => b.deal_score - a.deal_score);
 
     await finishSearch(req, usage.searchId, "completed", deals.length, null);
@@ -296,7 +328,7 @@ QUALITY STANDARD:
       meta: {
         model: MODEL,
         result_count: deals.length,
-        scoring_version: "v2.0",
+        scoring_version: "v2.1",
         quality_version: "comparables-v1",
         comparables_required: 2,
         listing_url_checks: true,
@@ -306,6 +338,9 @@ QUALITY STANDARD:
         subscription_status: entitlement.subscriptionStatus,
         min_roi: minRoi,
         min_score: minScore,
+        min_profit: minProfit,
+        max_ask_price: maxAskPrice,
+        condition_preference: conditionPreference,
         preferred_sites: preferredLabels,
         broad_web_search: true,
         identity_source: "OWN THE WALL",
@@ -430,6 +465,9 @@ async function reserveSearch(
   preferredSites: string[],
   minRoi: number | null,
   minScore: number | null,
+  minProfit: number | null,
+  maxAskPrice: number | null,
+  conditionPreference: string,
 ): Promise<SearchUsage> {
   const token = authToken(req);
   if (!token) throw new AuthError(401, "Sign in with your OWN THE WALL account first.");
@@ -446,6 +484,9 @@ async function reserveSearch(
       p_preferred_sites: preferredSites,
       p_min_roi: minRoi,
       p_min_score: minScore,
+      p_min_profit: minProfit,
+      p_max_ask_price: maxAskPrice,
+      p_condition_preference: conditionPreference,
     }),
     cache: "no-store",
   });
