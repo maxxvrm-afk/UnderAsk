@@ -48,6 +48,9 @@ type StoredSearch = {
     result_count?: number;
     min_roi?: number | null;
     min_score?: number | null;
+    min_profit?: number | null;
+    max_ask_price?: number | null;
+    condition_preference?: string;
     preferred_sites?: string[];
     plan?: string;
     subscription_status?: string;
@@ -64,6 +67,9 @@ type StoredSearch = {
   filters?: {
     minRoi?: number | null;
     minScore?: number | null;
+    minProfit?: number | null;
+    maxAskPrice?: number | null;
+    conditionPreference?: string;
     preferredSiteIds?: string[];
     preferredSites?: string[];
   } | null;
@@ -81,9 +87,20 @@ const LABEL_TO_SITE: Record<string, string> = {
   AutoScout24: "autoscout24",
 };
 
+const CONDITION_LABELS: Record<string, string> = {
+  any: "Any condition",
+  ready: "Ready to resell",
+  cosmetic_ok: "Cosmetic work OK",
+  repair_ok: "Repair projects OK",
+};
+
 function searchConfig(result: StoredSearch) {
   const minRoi = result.filters?.minRoi ?? result.meta?.min_roi ?? null;
   const minScore = result.filters?.minScore ?? result.meta?.min_score ?? null;
+  const minProfit = result.filters?.minProfit ?? result.meta?.min_profit ?? null;
+  const maxAskPrice = result.filters?.maxAskPrice ?? result.meta?.max_ask_price ?? null;
+  const conditionPreference =
+    result.filters?.conditionPreference ?? result.meta?.condition_preference ?? "any";
 
   const directIds = Array.isArray(result.filters?.preferredSiteIds)
     ? result.filters?.preferredSiteIds || []
@@ -97,7 +114,7 @@ function searchConfig(result: StoredSearch) {
     ? directIds
     : labels.map((site) => LABEL_TO_SITE[site] || site).filter(Boolean);
 
-  return { minRoi, minScore, preferredSites };
+  return { minRoi, minScore, minProfit, maxAskPrice, conditionPreference, preferredSites };
 }
 
 function comparableLabel(kind: Comparable["kind"]) {
@@ -145,8 +162,11 @@ export default function ResultsPage() {
         preferredSites: config.preferredSites,
         minRoi: config.minRoi,
         minScore: config.minScore,
+        minProfit: config.minProfit,
+        maxAskPrice: config.maxAskPrice,
+        conditionPreference: config.conditionPreference,
       });
-      setActionMessage("Search saved.");
+      setActionMessage("Search saved with all reseller filters.");
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Could not save this search.");
     } finally {
@@ -178,6 +198,9 @@ export default function ResultsPage() {
           query: result.query,
           minRoi: config.minRoi,
           minScore: config.minScore,
+          minProfit: config.minProfit,
+          maxAskPrice: config.maxAskPrice,
+          conditionPreference: config.conditionPreference,
           preferredSites: config.preferredSites,
         }),
       });
@@ -204,6 +227,9 @@ export default function ResultsPage() {
         filters: {
           minRoi: config.minRoi,
           minScore: config.minScore,
+          minProfit: config.minProfit,
+          maxAskPrice: config.maxAskPrice,
+          conditionPreference: config.conditionPreference,
           preferredSiteIds: config.preferredSites,
           preferredSites: Array.isArray(data?.meta?.preferred_sites)
             ? data.meta.preferred_sites
@@ -227,16 +253,9 @@ export default function ResultsPage() {
       <main className="shell">
         <nav className="nav">
           <a className="brand" href="/">UnderAsk</a>
-          <div className="navLinks">
-            <a href="/search">Search</a>
-            <a href="/saved">Saved</a>
-            <a href="/pricing">Pricing</a>
-          </div>
+          <div className="navLinks"><a href="/search">Search</a><a href="/saved">Saved</a><a href="/pricing">Pricing</a></div>
         </nav>
-        <section className="resultsHero">
-          <div className="eyebrow">LOADING RESULTS</div>
-          <h1>Your deals are ready.</h1>
-        </section>
+        <section className="resultsHero"><div className="eyebrow">LOADING RESULTS</div><h1>Your deals are ready.</h1></section>
       </main>
     );
   }
@@ -246,19 +265,12 @@ export default function ResultsPage() {
       <main className="shell">
         <nav className="nav">
           <a className="brand" href="/">UnderAsk</a>
-          <div className="navLinks">
-            <a href="/search">Search</a>
-            <a href="/saved">Saved</a>
-            <a href="/pricing">Pricing</a>
-          </div>
+          <div className="navLinks"><a href="/search">Search</a><a href="/saved">Saved</a><a href="/pricing">Pricing</a></div>
         </nav>
-
         <section className="resultsHero emptyResults">
           <div className="eyebrow">NO ACTIVE SEARCH</div>
           <h1>Start with a search.</h1>
-          <p className="lede small">
-            UnderAsk needs a fresh search before it can show ranked deals here.
-          </p>
+          <p className="lede small">UnderAsk needs a fresh search before it can show ranked deals here.</p>
           <a className="buttonPrimary" href="/search">Find deals</a>
         </section>
       </main>
@@ -271,9 +283,20 @@ export default function ResultsPage() {
     query: result.query,
     minRoi: config.minRoi,
     minScore: config.minScore,
+    minProfit: config.minProfit,
+    maxAskPrice: config.maxAskPrice,
   });
   const remaining = result.meta?.usage?.remaining;
   const limit = result.meta?.usage?.limit;
+  const activeFilters = [
+    config.maxAskPrice !== null ? `BUY ≤ €${config.maxAskPrice}` : null,
+    config.minProfit !== null ? `PROFIT ≥ €${config.minProfit}` : null,
+    config.minRoi !== null ? `ROI ≥ ${config.minRoi}%` : null,
+    config.minScore !== null ? `AI ≥ ${config.minScore}/100` : null,
+    config.conditionPreference !== "any"
+      ? CONDITION_LABELS[config.conditionPreference] || config.conditionPreference
+      : null,
+  ].filter(Boolean) as string[];
 
   return (
     <main className="shell resultsShell">
@@ -298,10 +321,13 @@ export default function ResultsPage() {
                 Quality checked · minimum {result.meta.comparables_required || 2} comparables per deal · duplicate filtering active.
               </p>
             )}
+            {activeFilters.length > 0 && (
+              <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginTop: 10 }}>
+                {activeFilters.map((filter) => <span className="planBadge" key={filter}>{filter}</span>)}
+              </div>
+            )}
             {typeof remaining === "number" && typeof limit === "number" && (
-              <p className="lede small" style={{ marginTop: 8 }}>
-                {remaining} of {limit} searches remaining in your current allowance.
-              </p>
+              <p className="lede small" style={{ marginTop: 8 }}>{remaining} of {limit} searches remaining in your current allowance.</p>
             )}
           </div>
           <div style={{ display: "flex", gap: 9, flexWrap: "wrap", justifyContent: "flex-end" }}>
@@ -322,10 +348,9 @@ export default function ResultsPage() {
           <span className="source">SEARCH COMPLETE · 1 SEARCH USED</span>
           <h2>{noResultsAdvice.title}</h2>
           <p>{noResultsAdvice.message}</p>
-          {(config.minRoi !== null || config.minScore !== null) && (
+          {activeFilters.length > 0 && (
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "16px 0" }}>
-              {config.minRoi !== null && <span className="planBadge">ROI ≥ {config.minRoi}%</span>}
-              {config.minScore !== null && <span className="planBadge">AI ≥ {config.minScore}/100</span>}
+              {activeFilters.map((filter) => <span className="planBadge" key={filter}>{filter}</span>)}
             </div>
           )}
           <a className="buttonPrimary" href="/search">Adjust search</a>
@@ -335,15 +360,8 @@ export default function ResultsPage() {
           {deals.map((deal, index) => (
             <article className="dealCard" key={`${deal.url}-${index}`}>
               <div className="dealTop">
-                <div>
-                  <span className="source">#{index + 1} · {deal.source}</span>
-                  <h2>{deal.title}</h2>
-                </div>
-
-                <div className="score">
-                  <strong>{Math.round(deal.deal_score)}</strong>
-                  <span>/100</span>
-                </div>
+                <div><span className="source">#{index + 1} · {deal.source}</span><h2>{deal.title}</h2></div>
+                <div className="score"><strong>{Math.round(deal.deal_score)}</strong><span>/100</span></div>
               </div>
 
               <div className="metrics">
@@ -360,28 +378,17 @@ export default function ResultsPage() {
               <p className="reasoning">{deal.reasoning}</p>
 
               <div className="detailGrid">
-                <div>
-                  <span className="detailLabel">MAIN RISK</span>
-                  <p>{deal.risks?.[0] || "No major risk flagged."}</p>
-                </div>
+                <div><span className="detailLabel">MAIN RISK</span><p>{deal.risks?.[0] || "No major risk flagged."}</p></div>
                 <div>
                   <span className="detailLabel">LISTING CHECK</span>
-                  <p>
-                    {deal.listing_check === "reachable"
-                      ? "Listing URL responded successfully during this search."
-                      : "Direct URL found by live search; independent URL check was blocked or inconclusive."}
-                  </p>
+                  <p>{deal.listing_check === "reachable"
+                    ? "Listing URL responded successfully during this search."
+                    : "Direct URL found by live search; independent URL check was blocked or inconclusive."}</p>
                 </div>
               </div>
 
               {Array.isArray(deal.comparables) && deal.comparables.length >= 2 && (
-                <div
-                  style={{
-                    marginTop: 18,
-                    paddingTop: 16,
-                    borderTop: "1px solid rgba(255,255,255,.10)",
-                  }}
-                >
+                <div style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid rgba(255,255,255,.10)" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
                     <span className="detailLabel">VALUE EVIDENCE</span>
                     <span className="source">{deal.comparables.length} COMPARABLES</span>
@@ -394,23 +401,14 @@ export default function ResultsPage() {
                         target="_blank"
                         rel="noreferrer"
                         style={{
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                          gap: 14,
-                          padding: "10px 12px",
-                          border: "1px solid rgba(255,255,255,.10)",
-                          borderRadius: 10,
-                          color: "inherit",
-                          textDecoration: "none",
-                          background: "rgba(255,255,255,.025)",
+                          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14,
+                          padding: "10px 12px", border: "1px solid rgba(255,255,255,.10)", borderRadius: 10,
+                          color: "inherit", textDecoration: "none", background: "rgba(255,255,255,.025)",
                         }}
                       >
                         <span style={{ minWidth: 0 }}>
                           <strong style={{ display: "block", fontSize: 12 }}>{comp.title}</strong>
-                          <span style={{ display: "block", marginTop: 2, fontSize: 10, opacity: 0.58 }}>
-                            {comparableLabel(comp.kind)} · {comp.source}
-                          </span>
+                          <span style={{ display: "block", marginTop: 2, fontSize: 10, opacity: 0.58 }}>{comparableLabel(comp.kind)} · {comp.source}</span>
                         </span>
                         <strong style={{ whiteSpace: "nowrap" }}>€{comp.price}</strong>
                       </a>
@@ -419,9 +417,7 @@ export default function ResultsPage() {
                 </div>
               )}
 
-              <a className="openLink" href={deal.url} target="_blank" rel="noreferrer">
-                Open listing →
-              </a>
+              <a className="openLink" href={deal.url} target="_blank" rel="noreferrer">Open listing →</a>
             </article>
           ))}
         </section>
