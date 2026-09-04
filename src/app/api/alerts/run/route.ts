@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { OTW_PUBLISHABLE_KEY, OTW_SUPABASE_URL } from "@/lib/ownTheWallConfig";
+import { processDealCandidates } from "@/lib/dealQuality";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -22,7 +23,7 @@ const DEAL_SCHEMA = {
   properties: {
     deals: {
       type: "array",
-      maxItems: 4,
+      maxItems: 6,
       items: {
         type: "object",
         properties: {
@@ -30,8 +31,6 @@ const DEAL_SCHEMA = {
           url: { type: "string" },
           source: { type: "string" },
           ask_price: { type: "number" },
-          expected_sale_price: { type: "number" },
-          quick_sale_price: { type: "number" },
           estimated_fees: { type: "number" },
           estimated_shipping: { type: "number" },
           estimated_repair_cost: { type: "number" },
@@ -39,15 +38,32 @@ const DEAL_SCHEMA = {
           speed_to_sell: { type: "integer", minimum: 0, maximum: 100 },
           reasoning: { type: "string" },
           risks: { type: "array", items: { type: "string" } },
-          evidence: { type: "array", items: { type: "string" } },
+          comparables: {
+            type: "array",
+            minItems: 2,
+            maxItems: 4,
+            items: {
+              type: "object",
+              properties: {
+                title: { type: "string" },
+                url: { type: "string" },
+                source: { type: "string" },
+                price: { type: "number" },
+                kind: {
+                  type: "string",
+                  enum: ["sold", "asking", "market_reference"],
+                },
+              },
+              required: ["title", "url", "source", "price", "kind"],
+              additionalProperties: false,
+            },
+          },
         },
         required: [
           "title",
           "url",
           "source",
           "ask_price",
-          "expected_sale_price",
-          "quick_sale_price",
           "estimated_fees",
           "estimated_shipping",
           "estimated_repair_cost",
@@ -55,7 +71,7 @@ const DEAL_SCHEMA = {
           "speed_to_sell",
           "reasoning",
           "risks",
-          "evidence",
+          "comparables",
         ],
         additionalProperties: false,
       },
@@ -104,27 +120,33 @@ export async function POST(req: Request) {
     const alertMinScore = Math.max(70, optionalNumber(job.alert_min_score) ?? 70);
 
     const preferenceText = preferredLabels.length
-      ? `Give extra search priority to these marketplaces: ${preferredLabels.join(", ")}. IMPORTANT: these are preferences, NOT an allowlist. Continue searching the broader public web for stronger listings and comparables.`
+      ? `Give extra search priority to these marketplaces: ${preferredLabels.join(", ")}. IMPORTANT: these are preferences, NOT an allowlist. Continue searching the broader public web for stronger listings and comparable evidence.`
       : "No marketplace preference is selected. Search broadly across the public web.";
 
-    const prompt = `You are UnderAsk, a deal-finding engine running a saved-search alert.\nSearch the live public web for REAL second-hand or marketplace listings matching:\n"${job.query}"\n\n${preferenceText}\n${minRoi !== null ? `Target deals likely to achieve at least ${minRoi}% server-calculated ROI.` : ""}\nPrioritize unusually strong, newly discoverable listings because an alert should only fire for high-quality opportunities.\n\nRULES:\n- Return at most 4 strong deals.\n- Every result MUST have a real public listing URL found during this search.\n- Prefer direct listing URLs over search/category pages.\n- Do not invent listings, prices, URLs, sellers, or evidence.\n- expected_sale_price = realistic achievable resale.\n- quick_sale_price = conservative fast-sale value.\n- estimated fees, shipping and repair cost must be realistic, or 0 when genuinely not applicable.\n- Do NOT calculate ROI, net profit, price gap or deal score. The server calculates those.\n- Numeric money values in EUR.\n- confidence and speed_to_sell are 0-100 integers.\n- If no verifiable deal is strong enough, return an empty deals array.`;
+    const prompt = `You are UnderAsk, a conservative deal-finding engine running a saved-search alert.\nSearch the live public web for REAL second-hand or marketplace listings matching:\n"${job.query}"\n\n${preferenceText}\n${minRoi !== null ? `Target deals likely to achieve at least ${minRoi}% server-calculated ROI.` : ""}\nPrioritize unusually strong, newly discoverable listings because an alert should only fire for high-quality opportunities.\n\nQUALITY STANDARD:\n- Return at most 6 candidate deals; the server independently validates, deduplicates and ranks them.\n- Every candidate MUST use a real DIRECT listing URL, never a search/category/home page.\n- For every candidate, include 2-4 UNIQUE public comparables for the same or genuinely equivalent item/model/version/condition.\n- Every comparable must have a real public URL and numeric EUR price.\n- Prefer genuinely sold/completed evidence; use kind=sold only when the source actually supports that status. Otherwise label asking or market_reference honestly.\n- Never reuse the candidate listing as a comparable.\n- Do not return a candidate if fewer than 2 defensible comparables exist.\n- Never invent URLs, prices, sellers, sold status, condition or evidence.\n- Do NOT calculate expected sale value, quick-sale value, ROI, net profit, price gap or deal score; the server derives these from the comparables and costs.\n- estimated fees, shipping and repair costs must be realistic, or 0 when genuinely not applicable.\n- confidence means confidence in evidence quality, not profit excitement.\n- Numeric money values are EUR; speed_to_sell and confidence are 0-100 integers.\n- If no candidate meets this evidence standard, return an empty deals array.`;
 
     const response = await openai(key, prompt);
     const text = outputText(response);
     if (!text) throw new Error("EMPTY_MODEL_OUTPUT");
 
     const parsed = JSON.parse(text);
-    const deals = (Array.isArray(parsed?.deals) ? parsed.deals : [])
-      .slice(0, 4)
-      .map(score)
-      .filter(Boolean)
-      .filter((deal: any) => deal.net_profit > 0 && deal.roi_percent > 0)
+    const qualityDeals = await processDealCandidates(
+      Array.isArray(parsed?.deals) ? parsed.deals : [],
+      4,
+    );
+
+    const deals = qualityDeals
       .filter((deal: any) => minRoi === null || deal.roi_percent >= minRoi)
       .filter((deal: any) => deal.deal_score >= alertMinScore)
       .sort((a: any, b: any) => b.deal_score - a.deal_score);
 
     const inserted = await finishJob(job.job_token, deals, null);
-    return NextResponse.json({ ok: true, found: deals.length, new_alerts: inserted });
+    return NextResponse.json({
+      ok: true,
+      found: deals.length,
+      new_alerts: inserted,
+      quality_version: "comparables-v1",
+    });
   } catch (error: any) {
     const message = String(error?.message || error?.code || "ALERT_SEARCH_FAILED").slice(0, 400);
     await finishJob(job.job_token, [], message).catch(() => null);
@@ -187,7 +209,7 @@ async function openai(key: string, prompt: string) {
         tools: [{ type: "web_search" }],
         tool_choice: "required",
         input: prompt,
-        max_output_tokens: 2600,
+        max_output_tokens: 4200,
         text: {
           format: {
             type: "json_schema",
@@ -227,73 +249,4 @@ function optionalNumber(value: unknown) {
   if (value === null || value === undefined || value === "") return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
-}
-
-function n(value: any) {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : 0;
-}
-
-function s(value: any) {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function arr(value: any) {
-  return Array.isArray(value) ? value.map(s).filter(Boolean) : [];
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function r2(value: number) {
-  return Math.round(value * 100) / 100;
-}
-
-function score(deal: any) {
-  const title = s(deal.title);
-  const url = s(deal.url);
-  const source = s(deal.source) || "Web";
-  const ask = n(deal.ask_price);
-  const expected = n(deal.expected_sale_price);
-  const quick = n(deal.quick_sale_price);
-  const fees = Math.max(0, n(deal.estimated_fees));
-  const shipping = Math.max(0, n(deal.estimated_shipping));
-  const repair = Math.max(0, n(deal.estimated_repair_cost));
-  const confidence = clamp(n(deal.confidence), 0, 100);
-  const speed = clamp(n(deal.speed_to_sell), 0, 100);
-
-  if (!title || !/^https?:\/\//i.test(url) || ask <= 0 || expected <= 0 || quick <= 0) return null;
-
-  const investment = ask + fees + shipping + repair;
-  const profit = expected - investment;
-  const roi = investment > 0 ? (profit / investment) * 100 : 0;
-  const gap = expected > 0 ? ((expected - ask) / expected) * 100 : 0;
-  const total = 100 * (
-    0.38 * clamp(roi / 60, 0, 1) +
-    0.22 * clamp(gap / 45, 0, 1) +
-    0.25 * (confidence / 100) +
-    0.15 * (speed / 100)
-  );
-
-  return {
-    title,
-    url,
-    source,
-    ask_price: r2(ask),
-    expected_sale_price: r2(expected),
-    quick_sale_price: r2(quick),
-    estimated_fees: r2(fees),
-    estimated_shipping: r2(shipping),
-    estimated_repair_cost: r2(repair),
-    net_profit: r2(profit),
-    roi_percent: r2(roi),
-    confidence: Math.round(confidence),
-    speed_to_sell: Math.round(speed),
-    price_gap_percent: r2(gap),
-    deal_score: r2(clamp(total, 0, 100)),
-    reasoning: s(deal.reasoning),
-    risks: arr(deal.risks).slice(0, 3),
-    evidence: arr(deal.evidence).slice(0, 3),
-  };
 }
