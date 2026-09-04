@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { normalizePlan, SEARCH_PLAN_RULES } from "@/lib/searchPlans";
 import { OTW_PUBLISHABLE_KEY, OTW_SUPABASE_URL } from "@/lib/ownTheWallConfig";
+import { processDealCandidates } from "@/lib/dealQuality";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -23,7 +24,7 @@ const DEAL_SCHEMA = {
   properties: {
     deals: {
       type: "array",
-      maxItems: 4,
+      maxItems: 6,
       items: {
         type: "object",
         properties: {
@@ -31,8 +32,6 @@ const DEAL_SCHEMA = {
           url: { type: "string" },
           source: { type: "string" },
           ask_price: { type: "number" },
-          expected_sale_price: { type: "number" },
-          quick_sale_price: { type: "number" },
           estimated_fees: { type: "number" },
           estimated_shipping: { type: "number" },
           estimated_repair_cost: { type: "number" },
@@ -40,15 +39,32 @@ const DEAL_SCHEMA = {
           speed_to_sell: { type: "integer", minimum: 0, maximum: 100 },
           reasoning: { type: "string" },
           risks: { type: "array", items: { type: "string" } },
-          evidence: { type: "array", items: { type: "string" } },
+          comparables: {
+            type: "array",
+            minItems: 2,
+            maxItems: 4,
+            items: {
+              type: "object",
+              properties: {
+                title: { type: "string" },
+                url: { type: "string" },
+                source: { type: "string" },
+                price: { type: "number" },
+                kind: {
+                  type: "string",
+                  enum: ["sold", "asking", "market_reference"],
+                },
+              },
+              required: ["title", "url", "source", "price", "kind"],
+              additionalProperties: false,
+            },
+          },
         },
         required: [
           "title",
           "url",
           "source",
           "ask_price",
-          "expected_sale_price",
-          "quick_sale_price",
           "estimated_fees",
           "estimated_shipping",
           "estimated_repair_cost",
@@ -56,7 +72,7 @@ const DEAL_SCHEMA = {
           "speed_to_sell",
           "reasoning",
           "risks",
-          "evidence",
+          "comparables",
         ],
         additionalProperties: false,
       },
@@ -218,7 +234,7 @@ export async function POST(req: NextRequest) {
   }
 
   const preferenceText = preferredLabels.length
-    ? `Give extra search priority to these marketplaces: ${preferredLabels.join(", ")}. IMPORTANT: these are preferences, NOT an allowlist. Continue searching the broader public web for stronger listings, market evidence and comparables.`
+    ? `Give extra search priority to these marketplaces: ${preferredLabels.join(", ")}. IMPORTANT: these are preferences, NOT an allowlist. Continue searching the broader public web for stronger listings and comparable market evidence.`
     : "No marketplace preference is selected. Search broadly across the public web and use the strongest verifiable sources you can find.";
 
   const thresholdText = [
@@ -232,29 +248,30 @@ export async function POST(req: NextRequest) {
     .filter(Boolean)
     .join("\n");
 
-  const prompt = `You are UnderAsk, a deal-finding engine.
+  const prompt = `You are UnderAsk, a conservative deal-finding engine.
 Search the live public web for REAL second-hand or marketplace listings matching:
 "${query}"
 
 ${preferenceText}
 ${thresholdText}
 
-Find public market evidence/comparables to estimate resale value.
-
-RULES:
-- Return at most 4 strong deals.
-- Every result MUST have a real public listing URL found during this search.
-- Prefer direct listing URLs over search/category pages.
-- Do not invent listings, prices, URLs, sellers, or evidence.
-- Exclude uncertain or unverifiable results.
-- expected_sale_price = realistic achievable resale, never the highest asking price.
-- quick_sale_price = conservative fast-sale value.
+QUALITY STANDARD:
+- Return at most 6 candidate deals. The server will independently validate, deduplicate and rank them, and expose at most 4.
+- Every candidate MUST have a real DIRECT listing URL found during this live search. Never use a search page, category page, homepage or invented URL.
+- For EACH candidate, find 2-4 UNIQUE public comparables for the same or genuinely equivalent item/model/version/condition.
+- Every comparable MUST have its own real public URL and a numeric EUR price.
+- Prefer sold/completed evidence whenever it is genuinely available. Label it kind=sold only when the source actually supports a sold/completed price. Otherwise use asking or market_reference honestly.
+- Never reuse the candidate listing itself as a comparable.
+- Do not return a candidate at all if you cannot find at least 2 defensible comparables.
+- Do not invent listings, prices, URLs, sellers, sold status, condition, or evidence.
+- Exclude uncertain, stale-looking or unverifiable candidates rather than guessing.
+- Do NOT calculate expected sale value, quick-sale value, ROI, net profit, price gap or deal score. The server derives those from the comparables and costs.
 - estimated_fees, estimated_shipping and estimated_repair_cost must be realistic estimates, or 0 when genuinely not applicable.
-- Do NOT calculate ROI, net profit, price gap or deal score. The server calculates those.
-- Keep reasoning and evidence concise.
-- Numeric money values in EUR.
-- confidence and speed_to_sell are 0-100 integers.
-- If no verifiable deal is good enough, return an empty deals array.`;
+- confidence is confidence in the listing + comparable evidence, not excitement about the profit.
+- speed_to_sell is a realistic 0-100 estimate.
+- Keep reasoning and risks concise and specific.
+- All numeric money values must be converted to EUR.
+- If no candidate meets this evidence standard, return an empty deals array.`;
 
   try {
     const response = await openai(key, prompt);
@@ -262,11 +279,12 @@ RULES:
     if (!text) throw new Error("EMPTY_MODEL_OUTPUT");
 
     const parsed = JSON.parse(text);
-    const deals = (Array.isArray(parsed?.deals) ? parsed.deals : [])
-      .slice(0, 4)
-      .map(score)
-      .filter(Boolean)
-      .filter((d: any) => d.net_profit > 0 && d.roi_percent > 0)
+    const qualityDeals = await processDealCandidates(
+      Array.isArray(parsed?.deals) ? parsed.deals : [],
+      4,
+    );
+
+    const deals = qualityDeals
       .filter((d: any) => minRoi === null || d.roi_percent >= minRoi)
       .filter((d: any) => minScore === null || d.deal_score >= minScore)
       .sort((a: any, b: any) => b.deal_score - a.deal_score);
@@ -278,7 +296,12 @@ RULES:
       meta: {
         model: MODEL,
         result_count: deals.length,
-        scoring_version: "v1.6",
+        scoring_version: "v2.0",
+        quality_version: "comparables-v1",
+        comparables_required: 2,
+        listing_url_checks: true,
+        duplicate_filtering: true,
+        resale_value_source: "server-derived comparables",
         plan: planRule.name,
         subscription_status: entitlement.subscriptionStatus,
         min_roi: minRoi,
@@ -505,7 +528,7 @@ async function openai(key: string, prompt: string) {
         tools: [{ type: "web_search" }],
         tool_choice: "required",
         input: prompt,
-        max_output_tokens: 2600,
+        max_output_tokens: 4200,
         text: {
           format: {
             type: "json_schema",
@@ -575,81 +598,4 @@ function clampOptional(value: unknown, min: number, max: number) {
   return Number.isFinite(number)
     ? Math.min(max, Math.max(min, number))
     : null;
-}
-
-function n(v: any) {
-  const x = Number(v);
-  return Number.isFinite(x) ? x : 0;
-}
-
-function s(v: any) {
-  return typeof v === "string" ? v.trim() : "";
-}
-
-function arr(v: any) {
-  return Array.isArray(v) ? v.map(s).filter(Boolean) : [];
-}
-
-function clamp(x: number, a: number, b: number) {
-  return Math.min(b, Math.max(a, x));
-}
-
-function r2(x: number) {
-  return Math.round(x * 100) / 100;
-}
-
-function score(d: any) {
-  const title = s(d.title);
-  const url = s(d.url);
-  const source = s(d.source) || "Web";
-  const ask = n(d.ask_price);
-  const expected = n(d.expected_sale_price);
-  const quick = n(d.quick_sale_price);
-  const fees = Math.max(0, n(d.estimated_fees));
-  const shipping = Math.max(0, n(d.estimated_shipping));
-  const repair = Math.max(0, n(d.estimated_repair_cost));
-  const confidence = clamp(n(d.confidence), 0, 100);
-  const speed = clamp(n(d.speed_to_sell), 0, 100);
-
-  if (
-    !title ||
-    !/^https?:\/\//i.test(url) ||
-    ask <= 0 ||
-    expected <= 0 ||
-    quick <= 0
-  ) {
-    return null;
-  }
-
-  const investment = ask + fees + shipping + repair;
-  const profit = expected - investment;
-  const roi = investment > 0 ? (profit / investment) * 100 : 0;
-  const gap = expected > 0 ? ((expected - ask) / expected) * 100 : 0;
-  const total =
-    100 *
-    (0.38 * clamp(roi / 60, 0, 1) +
-      0.22 * clamp(gap / 45, 0, 1) +
-      0.25 * (confidence / 100) +
-      0.15 * (speed / 100));
-
-  return {
-    title,
-    url,
-    source,
-    ask_price: r2(ask),
-    expected_sale_price: r2(expected),
-    quick_sale_price: r2(quick),
-    estimated_fees: r2(fees),
-    estimated_shipping: r2(shipping),
-    estimated_repair_cost: r2(repair),
-    net_profit: r2(profit),
-    roi_percent: r2(roi),
-    confidence: Math.round(confidence),
-    speed_to_sell: Math.round(speed),
-    price_gap_percent: r2(gap),
-    deal_score: r2(clamp(total, 0, 100)),
-    reasoning: s(d.reasoning),
-    risks: arr(d.risks).slice(0, 3),
-    evidence: arr(d.evidence).slice(0, 3),
-  };
 }
