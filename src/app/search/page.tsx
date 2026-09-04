@@ -9,6 +9,8 @@ import {
   signOutOwnTheWall,
 } from "@/lib/ownTheWallAuth";
 import { subscriptionHasAccess } from "@/lib/underAskBilling";
+import { fetchUnderAskPreferences } from "@/lib/underAskPreferences";
+import { getSearchGuidance } from "@/lib/searchGuidance";
 
 const SITE_OPTIONS = [
   { id: "marktplaats", label: "Marktplaats" },
@@ -44,6 +46,8 @@ export default function SearchPage() {
 
   const planRule = SEARCH_PLAN_RULES[plan];
   const hasAccess = subscriptionHasAccess(subscriptionStatus);
+  const searchGuidance = getSearchGuidance({ query, minRoi, minScore });
+  const hasDangerousFilters = searchGuidance.some((item) => item.severity === "danger");
 
   useEffect(() => {
     let mounted = true;
@@ -71,12 +75,21 @@ export default function SearchPage() {
           }
         }
 
+        const preferences = await fetchUnderAskPreferences(session.access_token).catch(() => null);
         if (!mounted) return;
 
         setPlan(entitlement.plan);
         setSubscriptionStatus(entitlement.subscription_status);
         setAccessToken(session.access_token);
         setAccountEmail(session.user.email || "OWN THE WALL user");
+
+        if (preferences?.completed_at) {
+          if (preferences.resell_focus) setQuery(preferences.resell_focus);
+          if (preferences.default_min_roi !== null) setMinRoi(String(preferences.default_min_roi));
+          if (preferences.default_min_score !== null) setMinScore(String(preferences.default_min_score));
+          if (preferences.primary_marketplace) setPreferredSites([preferences.primary_marketplace]);
+        }
+
         setAccountReady(true);
 
         if (cameBackFromBilling && typeof window !== "undefined") {
@@ -146,6 +159,15 @@ export default function SearchPage() {
     const roiValue = minRoi === "" ? null : Number(minRoi);
     const scoreValue = minScore === "" ? null : Number(minScore);
 
+    if (roiValue !== null && (!Number.isFinite(roiValue) || roiValue < 0 || roiValue > 1000)) {
+      setError("ROI must be between 0% and 1000%.");
+      return;
+    }
+    if (scoreValue !== null && (!Number.isFinite(scoreValue) || scoreValue < 0 || scoreValue > 100)) {
+      setError("AI score must be between 0 and 100.");
+      return;
+    }
+
     setLoading(true);
     setError("");
     startProgress();
@@ -159,8 +181,8 @@ export default function SearchPage() {
         },
         body: JSON.stringify({
           query: cleanQuery,
-          minRoi: Number.isFinite(roiValue) ? roiValue : null,
-          minScore: Number.isFinite(scoreValue) ? scoreValue : null,
+          minRoi: roiValue,
+          minScore: scoreValue,
           preferredSites,
         }),
       });
@@ -192,6 +214,7 @@ export default function SearchPage() {
           filters: {
             minRoi: roiValue,
             minScore: scoreValue,
+            preferredSiteIds: preferredSites,
             preferredSites: SITE_OPTIONS.filter((site) =>
               preferredSites.includes(site.id),
             ).map((site) => site.label),
@@ -241,6 +264,7 @@ export default function SearchPage() {
         <nav className="nav">
           <a className="brand" href="/">UnderAsk</a>
           <div className="navLinks accountNav">
+            <a href="/onboarding?next=/pricing">Preferences</a>
             <a href="/pricing">Pricing</a>
             <button type="button" className="navButton" onClick={logout}>Sign out</button>
           </div>
@@ -260,7 +284,7 @@ export default function SearchPage() {
           <div className="subscriptionGateCard">
             <strong>{billingReturned ? "Payment is still being confirmed." : "Choose the search access you need."}</strong>
             <p>
-              Stripe activates the selected tier automatically. Scout starts at €39/month and Business unlocks broad web search without a required marketplace selection.
+              New accounts can start with a 7-day trial and up to 10 live searches. Scout is €29.99/month; Business unlocks broad web search without a required marketplace selection.
             </p>
             <a className="buttonPrimary" href="/pricing">View plans</a>
           </div>
@@ -285,6 +309,7 @@ export default function SearchPage() {
       <nav className="nav">
         <a className="brand" href="/">UnderAsk</a>
         <div className="navLinks accountNav">
+          <a href="/onboarding?next=/search">Preferences</a>
           <a href="/pricing">Pricing</a>
           <span className="planBadge">{planRule.name}</span>
           <button type="button" className="navButton" onClick={logout}>Sign out</button>
@@ -313,7 +338,7 @@ export default function SearchPage() {
               autoFocus
             />
             <button className="buttonPrimary" disabled={loading} type="submit">
-              {loading ? "Searching..." : "Find deals"}
+              {loading ? "Searching..." : hasDangerousFilters ? "Search anyway" : "Find deals"}
             </button>
           </div>
 
@@ -401,6 +426,34 @@ export default function SearchPage() {
               </div>
             </div>
           </details>
+
+          {searchGuidance.length > 0 && (
+            <div style={{ display: "grid", gap: 9, marginTop: 14, textAlign: "left" }}>
+              {searchGuidance.map((item, index) => (
+                <div
+                  key={`${item.title}-${index}`}
+                  style={{
+                    padding: "13px 15px",
+                    borderRadius: 14,
+                    border: item.severity === "danger"
+                      ? "1px solid rgba(255,90,90,.46)"
+                      : item.severity === "warning"
+                        ? "1px solid rgba(255,190,70,.38)"
+                        : "1px solid rgba(255,255,255,.12)",
+                    background: item.severity === "danger" ? "rgba(255,80,80,.055)" : "rgba(255,255,255,.03)",
+                  }}
+                >
+                  <strong style={{ display: "block" }}>{item.title}</strong>
+                  <span style={{ display: "block", marginTop: 4, opacity: .72, lineHeight: 1.45 }}>{item.message}</span>
+                </div>
+              ))}
+              {hasDangerousFilters && (
+                <div style={{ fontSize: 13, opacity: .66 }}>
+                  Search anyway is allowed. Once the live search starts, it uses 1 search even if zero listings pass these filters.
+                </div>
+              )}
+            </div>
+          )}
         </form>
 
         <div className="chips">
