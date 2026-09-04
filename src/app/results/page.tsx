@@ -7,6 +7,7 @@ import {
   signOutOwnTheWall,
 } from "@/lib/ownTheWallAuth";
 import { saveUnderAskSearch } from "@/lib/underAskSavedSearches";
+import { getNoResultsAdvice } from "@/lib/searchGuidance";
 
 type Deal = {
   title: string;
@@ -39,10 +40,12 @@ type StoredSearch = {
     min_score?: number | null;
     preferred_sites?: string[];
     plan?: string;
+    subscription_status?: string;
     usage?: {
       used?: number;
       limit?: number;
       remaining?: number;
+      period_days?: number;
     };
   } | null;
   filters?: {
@@ -192,7 +195,7 @@ export default function ResultsPage() {
 
       sessionStorage.setItem("underask:last-search", JSON.stringify(nextResult));
       setResult(nextResult);
-      setActionMessage("Fresh listings loaded.");
+      setActionMessage("Fresh listings loaded. This rerun used 1 search.");
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Could not rerun this search.");
     } finally {
@@ -244,6 +247,14 @@ export default function ResultsPage() {
   }
 
   const deals = Array.isArray(result.deals) ? result.deals : [];
+  const config = searchConfig(result);
+  const noResultsAdvice = getNoResultsAdvice({
+    query: result.query,
+    minRoi: config.minRoi,
+    minScore: config.minScore,
+  });
+  const remaining = result.meta?.usage?.remaining;
+  const limit = result.meta?.usage?.limit;
 
   return (
     <main className="shell resultsShell">
@@ -263,6 +274,11 @@ export default function ResultsPage() {
           <div>
             <h1>{deals.length ? `${deals.length} deals found.` : "No strong deals found."}</h1>
             <p className="lede small resultsQuery">“{result.query}”</p>
+            {typeof remaining === "number" && typeof limit === "number" && (
+              <p className="lede small" style={{ marginTop: 8 }}>
+                {remaining} of {limit} searches remaining in your current allowance.
+              </p>
+            )}
           </div>
           <div style={{ display: "flex", gap: 9, flexWrap: "wrap", justifyContent: "flex-end" }}>
             <button className="buttonGhost" type="button" disabled={saving || rerunning} onClick={saveCurrentSearch}>
@@ -279,12 +295,15 @@ export default function ResultsPage() {
 
       {deals.length === 0 ? (
         <section className="noDealsCard">
-          <span className="source">SEARCH COMPLETE</span>
-          <h2>No deal passed UnderAsk&apos;s profit filter.</h2>
-          <p>
-            Try increasing your budget, widening the location, or searching for
-            a broader product category.
-          </p>
+          <span className="source">SEARCH COMPLETE · 1 SEARCH USED</span>
+          <h2>{noResultsAdvice.title}</h2>
+          <p>{noResultsAdvice.message}</p>
+          {(config.minRoi !== null || config.minScore !== null) && (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "16px 0" }}>
+              {config.minRoi !== null && <span className="planBadge">ROI ≥ {config.minRoi}%</span>}
+              {config.minScore !== null && <span className="planBadge">AI ≥ {config.minScore}/100</span>}
+            </div>
+          )}
           <a className="buttonPrimary" href="/search">Adjust search</a>
         </section>
       ) : (
