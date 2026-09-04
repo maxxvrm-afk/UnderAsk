@@ -66,6 +66,16 @@ const DEAL_SCHEMA = {
   additionalProperties: false,
 } as const;
 
+type SearchUsage = {
+  allowed: boolean;
+  searchId: string | null;
+  plan: string;
+  used: number;
+  limit: number;
+  remaining: number;
+  reason: string | null;
+};
+
 class OpenAIError extends Error {
   status: number;
   code: string;
@@ -157,6 +167,56 @@ export async function POST(req: NextRequest) {
   const minScore = clampOptional(body?.minScore, 0, 100);
   const preferredLabels = preferredSites.map((site) => SITE_LABELS[site]);
 
+  let usage: SearchUsage;
+  try {
+    usage = await reserveSearch(req, query, preferredSites, minRoi, minScore);
+  } catch (error) {
+    if (error instanceof AuthError) {
+      return NextResponse.json({ error: error.message }, { status: error.status });
+    }
+    console.error("[UnderAsk deals] usage reservation failed", error);
+    return NextResponse.json(
+      { error: "UnderAsk could not verify your search allowance. Try again." },
+      { status: 503 },
+    );
+  }
+
+  if (!usage.allowed) {
+    if (usage.reason === "subscription_required") {
+      return NextResponse.json(
+        { error: "An active UnderAsk subscription is required before searching." },
+        { status: 402 },
+      );
+    }
+
+    if (usage.reason === "site_selection_invalid") {
+      return NextResponse.json(
+        { error: "The selected marketplaces are not allowed for your current plan." },
+        { status: 400 },
+      );
+    }
+
+    if (usage.reason === "invalid_query") {
+      return NextResponse.json({ error: "Enter a valid search request." }, { status: 400 });
+    }
+
+    if (usage.reason === "limit_reached") {
+      return NextResponse.json(
+        {
+          error: `You've used all ${usage.limit} searches available in your current 30-day window. Upgrade your plan or wait for older searches to roll off.`,
+          code: "SEARCH_LIMIT_REACHED",
+          usage: usagePayload(usage),
+        },
+        { status: 429 },
+      );
+    }
+
+    return NextResponse.json(
+      { error: "This search could not be authorized." },
+      { status: 403 },
+    );
+  }
+
   const preferenceText = preferredLabels.length
     ? `Give extra search priority to these marketplaces: ${preferredLabels.join(", ")}. IMPORTANT: these are preferences, NOT an allowlist. Continue searching the broader public web for stronger listings, market evidence and comparables.`
     : "No marketplace preference is selected. Search broadly across the public web and use the strongest verifiable sources you can find.";
@@ -211,12 +271,14 @@ RULES:
       .filter((d: any) => minScore === null || d.deal_score >= minScore)
       .sort((a: any, b: any) => b.deal_score - a.deal_score);
 
+    await finishSearch(req, usage.searchId, "completed", deals.length, null);
+
     return NextResponse.json({
       deals,
       meta: {
         model: MODEL,
         result_count: deals.length,
-        scoring_version: "v1.5",
+        scoring_version: "v1.6",
         plan: planRule.name,
         subscription_status: entitlement.subscriptionStatus,
         min_roi: minRoi,
@@ -224,9 +286,18 @@ RULES:
         preferred_sites: preferredLabels,
         broad_web_search: true,
         identity_source: "OWN THE WALL",
+        usage: usagePayload(usage),
       },
     });
   } catch (e: any) {
+    await finishSearch(
+      req,
+      usage.searchId,
+      "failed",
+      null,
+      e instanceof OpenAIError ? e.code : String(e?.message || e?.name || "SEARCH_FAILED"),
+    );
+
     console.error("[UnderAsk deals] search failed", {
       name: e?.name,
       message: e?.message,
@@ -240,6 +311,7 @@ RULES:
           {
             error:
               "Search capacity is busy right now. Please retry in about 30–60 seconds.",
+            usage: usagePayload(usage),
           },
           { status: 429 },
         );
@@ -250,6 +322,7 @@ RULES:
           {
             error:
               "UnderAsk's search connection is not configured correctly. Check the OpenAI API key and model access in Vercel.",
+            usage: usagePayload(usage),
           },
           { status: 503 },
         );
@@ -260,17 +333,22 @@ RULES:
       {
         error:
           "UnderAsk could not complete this search. Try again or use a slightly narrower request.",
+        usage: usagePayload(usage),
       },
       { status: 500 },
     );
   }
 }
 
-async function getEntitlement(req: NextRequest) {
+function authToken(req: NextRequest) {
   const authorization = req.headers.get("authorization") || "";
-  const token = authorization.startsWith("Bearer ")
+  return authorization.startsWith("Bearer ")
     ? authorization.slice(7).trim()
     : "";
+}
+
+async function getEntitlement(req: NextRequest) {
+  const token = authToken(req);
 
   if (!token) {
     throw new AuthError(401, "Sign in with your OWN THE WALL account first.");
@@ -320,6 +398,97 @@ async function getEntitlement(req: NextRequest) {
   return {
     plan: normalizePlan(row?.plan),
     subscriptionStatus,
+  };
+}
+
+async function reserveSearch(
+  req: NextRequest,
+  query: string,
+  preferredSites: string[],
+  minRoi: number | null,
+  minScore: number | null,
+): Promise<SearchUsage> {
+  const token = authToken(req);
+  if (!token) throw new AuthError(401, "Sign in with your OWN THE WALL account first.");
+
+  const response = await fetch(`${OTW_SUPABASE_URL}/rest/v1/rpc/underask_reserve_search`, {
+    method: "POST",
+    headers: {
+      apikey: OTW_PUBLISHABLE_KEY,
+      Authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      p_query: query,
+      p_preferred_sites: preferredSites,
+      p_min_roi: minRoi,
+      p_min_score: minScore,
+    }),
+    cache: "no-store",
+  });
+
+  if (response.status === 401 || response.status === 403) {
+    throw new AuthError(401, "Your OWN THE WALL session expired. Sign in again.");
+  }
+  if (!response.ok) throw new Error(`USAGE_RESERVE_${response.status}`);
+
+  const data = await response.json();
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!row) throw new Error("USAGE_RESERVE_EMPTY");
+
+  return {
+    allowed: Boolean(row.allowed),
+    searchId: typeof row.search_id === "string" ? row.search_id : null,
+    plan: typeof row.plan === "string" ? row.plan : "scout",
+    used: Number(row.used) || 0,
+    limit: Number(row.search_limit) || 0,
+    remaining: Number(row.remaining) || 0,
+    reason: typeof row.reason === "string" ? row.reason : null,
+  };
+}
+
+async function finishSearch(
+  req: NextRequest,
+  searchId: string | null,
+  status: "completed" | "failed",
+  resultCount: number | null,
+  errorCode: string | null,
+) {
+  if (!searchId) return;
+  const token = authToken(req);
+  if (!token) return;
+
+  try {
+    const response = await fetch(`${OTW_SUPABASE_URL}/rest/v1/rpc/underask_finish_search`, {
+      method: "POST",
+      headers: {
+        apikey: OTW_PUBLISHABLE_KEY,
+        Authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        p_search_id: searchId,
+        p_status: status,
+        p_result_count: resultCount,
+        p_error_code: errorCode,
+      }),
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      console.error("[UnderAsk deals] could not finish usage record", response.status);
+    }
+  } catch (error) {
+    console.error("[UnderAsk deals] could not finish usage record", error);
+  }
+}
+
+function usagePayload(usage: SearchUsage) {
+  return {
+    used: usage.used,
+    limit: usage.limit,
+    remaining: usage.remaining,
+    period_days: 30,
   };
 }
 
