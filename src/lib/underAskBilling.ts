@@ -1,9 +1,12 @@
 import { OTW_PUBLISHABLE_KEY, OTW_SUPABASE_URL } from "@/lib/ownTheWallConfig";
 import type { PlanId } from "@/lib/searchPlans";
 
+export type BillingInterval = "month" | "year";
+
 export async function createUnderAskCheckout(
   accessToken: string,
   plan: PlanId,
+  billingInterval: BillingInterval = "month",
 ) {
   const response = await fetch(
     `${OTW_SUPABASE_URL}/functions/v1/underask-create-checkout`,
@@ -14,7 +17,7 @@ export async function createUnderAskCheckout(
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ plan }),
+      body: JSON.stringify({ plan, billingInterval }),
     },
   );
 
@@ -45,8 +48,10 @@ type SubscriptionStatus =
 
 export type SubscriptionUpdate = {
   plan: PlanId;
+  billing_interval: BillingInterval;
   subscription_status: SubscriptionStatus;
   current_period_end: string | null;
+  trial_end: string | null;
   cancel_at_period_end: boolean;
 };
 
@@ -60,6 +65,10 @@ function normalizeStatus(value: unknown): SubscriptionStatus {
     return value;
   }
   return "inactive";
+}
+
+function normalizeInterval(value: unknown): BillingInterval {
+  return value === "year" ? "year" : "month";
 }
 
 async function manageSubscription(
@@ -91,10 +100,15 @@ async function manageSubscription(
       data?.plan === "business"
         ? data.plan
         : "scout",
+    billing_interval: normalizeInterval(data?.billing_interval),
     subscription_status: normalizeStatus(data?.subscription_status),
     current_period_end:
       typeof data?.current_period_end === "string"
         ? data.current_period_end
+        : null,
+    trial_end:
+      typeof data?.trial_end === "string"
+        ? data.trial_end
         : null,
     cancel_at_period_end: Boolean(data?.cancel_at_period_end),
   };
@@ -103,8 +117,13 @@ async function manageSubscription(
 export function changeUnderAskPlan(
   accessToken: string,
   plan: PlanId,
+  billingInterval: BillingInterval,
 ) {
-  return manageSubscription(accessToken, { action: "change_plan", plan });
+  return manageSubscription(accessToken, {
+    action: "change_plan",
+    plan,
+    billingInterval,
+  });
 }
 
 export function cancelUnderAskSubscription(accessToken: string) {
