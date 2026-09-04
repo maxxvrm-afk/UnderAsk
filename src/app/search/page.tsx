@@ -23,6 +23,13 @@ const SITE_OPTIONS = [
   { id: "autoscout24", label: "AutoScout24" },
 ];
 
+const CONDITION_OPTIONS = [
+  { id: "any", label: "Any", note: "Best economics win" },
+  { id: "ready", label: "Ready to resell", note: "No meaningful repair" },
+  { id: "cosmetic_ok", label: "Cosmetic work OK", note: "Scratches/detailing are fine" },
+  { id: "repair_ok", label: "Repair projects OK", note: "Damaged can be included" },
+];
+
 function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -38,6 +45,9 @@ export default function SearchPage() {
   const [query, setQuery] = useState("");
   const [minRoi, setMinRoi] = useState("");
   const [minScore, setMinScore] = useState("");
+  const [minProfit, setMinProfit] = useState("");
+  const [maxAskPrice, setMaxAskPrice] = useState("");
+  const [conditionPreference, setConditionPreference] = useState("any");
   const [preferredSites, setPreferredSites] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -46,7 +56,14 @@ export default function SearchPage() {
 
   const planRule = SEARCH_PLAN_RULES[plan];
   const hasAccess = subscriptionHasAccess(subscriptionStatus);
-  const searchGuidance = getSearchGuidance({ query, minRoi, minScore });
+  const searchGuidance = getSearchGuidance({
+    query,
+    minRoi,
+    minScore,
+    minProfit,
+    maxAskPrice,
+    conditionPreference,
+  });
   const hasDangerousFilters = searchGuidance.some((item) => item.severity === "danger");
 
   useEffect(() => {
@@ -131,9 +148,7 @@ export default function SearchPage() {
   function toggleSite(id: string) {
     setPreferredSites((current) => {
       if (current.includes(id)) return current.filter((site) => site !== id);
-      if (planRule.maxSites !== null && current.length >= planRule.maxSites) {
-        return current;
-      }
+      if (planRule.maxSites !== null && current.length >= planRule.maxSites) return current;
       return [...current, id];
     });
   }
@@ -158,6 +173,8 @@ export default function SearchPage() {
 
     const roiValue = minRoi === "" ? null : Number(minRoi);
     const scoreValue = minScore === "" ? null : Number(minScore);
+    const profitValue = minProfit === "" ? null : Number(minProfit);
+    const maxAskValue = maxAskPrice === "" ? null : Number(maxAskPrice);
 
     if (roiValue !== null && (!Number.isFinite(roiValue) || roiValue < 0 || roiValue > 1000)) {
       setError("ROI must be between 0% and 1000%.");
@@ -165,6 +182,14 @@ export default function SearchPage() {
     }
     if (scoreValue !== null && (!Number.isFinite(scoreValue) || scoreValue < 0 || scoreValue > 100)) {
       setError("AI score must be between 0 and 100.");
+      return;
+    }
+    if (profitValue !== null && (!Number.isFinite(profitValue) || profitValue < 0 || profitValue > 1_000_000)) {
+      setError("Minimum net profit must be between €0 and €1,000,000.");
+      return;
+    }
+    if (maxAskValue !== null && (!Number.isFinite(maxAskValue) || maxAskValue < 0 || maxAskValue > 1_000_000)) {
+      setError("Maximum buying price must be between €0 and €1,000,000.");
       return;
     }
 
@@ -183,6 +208,9 @@ export default function SearchPage() {
           query: cleanQuery,
           minRoi: roiValue,
           minScore: scoreValue,
+          minProfit: profitValue,
+          maxAskPrice: maxAskValue,
+          conditionPreference,
           preferredSites,
         }),
       });
@@ -214,10 +242,11 @@ export default function SearchPage() {
           filters: {
             minRoi: roiValue,
             minScore: scoreValue,
+            minProfit: profitValue,
+            maxAskPrice: maxAskValue,
+            conditionPreference,
             preferredSiteIds: preferredSites,
-            preferredSites: SITE_OPTIONS.filter((site) =>
-              preferredSites.includes(site.id),
-            ).map((site) => site.label),
+            preferredSites: SITE_OPTIONS.filter((site) => preferredSites.includes(site.id)).map((site) => site.label),
             plan: data?.meta?.plan || planRule.name,
           },
           searchedAt: Date.now(),
@@ -237,8 +266,8 @@ export default function SearchPage() {
   function progressLabel() {
     if (progress < 25) return "Searching live listings...";
     if (progress < 50) return "Checking asking prices...";
-    if (progress < 72) return "Comparing market value...";
-    if (progress < 92) return "Calculating resale potential...";
+    if (progress < 72) return "Verifying comparable value...";
+    if (progress < 92) return "Calculating real net profit...";
     if (progress < 100) return "Ranking the strongest deals...";
     return "Deals ready.";
   }
@@ -273,9 +302,7 @@ export default function SearchPage() {
         <section className="searchHero subscriptionGate">
           <div className="eyebrow">SUBSCRIPTION REQUIRED</div>
           <h1>Activate UnderAsk search.</h1>
-          <p className="lede small">
-            Your OWN THE WALL account is connected, but it does not currently have an active UnderAsk subscription.
-          </p>
+          <p className="lede small">Your OWN THE WALL account is connected, but it does not currently have an active UnderAsk subscription.</p>
           <div className="accountLine">
             <span>{accountEmail}</span>
             <span>Plan: {planRule.name}</span>
@@ -283,9 +310,7 @@ export default function SearchPage() {
           </div>
           <div className="subscriptionGateCard">
             <strong>{billingReturned ? "Payment is still being confirmed." : "Choose the search access you need."}</strong>
-            <p>
-              New accounts can start with a 7-day trial and up to 10 live searches. Scout is €29.99/month; Business unlocks broad web search without a required marketplace selection.
-            </p>
+            <p>New accounts can start with a 7-day trial and up to 10 live searches. Scout is €29.99/month; Business unlocks broad web search without a required marketplace selection.</p>
             <a className="buttonPrimary" href="/pricing">View plans</a>
           </div>
         </section>
@@ -296,6 +321,9 @@ export default function SearchPage() {
   const activePreferenceCount =
     (minRoi !== "" ? 1 : 0) +
     (minScore !== "" ? 1 : 0) +
+    (minProfit !== "" ? 1 : 0) +
+    (maxAskPrice !== "" ? 1 : 0) +
+    (conditionPreference !== "any" ? 1 : 0) +
     preferredSites.length;
 
   const siteRuleText = planRule.broadWithoutSelection
@@ -319,9 +347,7 @@ export default function SearchPage() {
       <section className="searchHero">
         <div className="eyebrow">AI DEAL INTELLIGENCE · {planRule.name.toUpperCase()}</div>
         <h1>Tell UnderAsk what deal you want.</h1>
-        <p className="lede small">
-          It searches the web, verifies market value, calculates ROI and ranks the strongest opportunities.
-        </p>
+        <p className="lede small">Set the money you can spend and the profit you actually need. UnderAsk verifies comparable value before ranking a flip.</p>
         <div className="accountLine">
           <span>{accountEmail}</span>
           <span>Identity: OWN THE WALL</span>
@@ -333,7 +359,7 @@ export default function SearchPage() {
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="I have €800. Find deals with at least €200 profit..."
+              placeholder="Nintendo Switch OLED, camera lenses, car parts..."
               disabled={loading}
               autoFocus
             />
@@ -345,8 +371,8 @@ export default function SearchPage() {
           <details className="filterMenu">
             <summary>
               <div>
-                <strong>Search preferences</strong>
-                <span>{planRule.name} plan · set ROI, score and marketplace priority</span>
+                <strong>Reseller filters</strong>
+                <span>{planRule.name} plan · budget, profit, ROI, quality and marketplace priority</span>
               </div>
               <div className="filterSummaryRight">
                 {activePreferenceCount > 0 && <span className="filterCount">{activePreferenceCount} active</span>}
@@ -361,6 +387,24 @@ export default function SearchPage() {
               </div>
 
               <div className="filterFields">
+                <label className="filterField">
+                  <span>MAX BUY PRICE</span>
+                  <div className="numberInputWrap">
+                    <input type="number" min="0" max="1000000" step="5" inputMode="numeric" placeholder="Any" value={maxAskPrice} disabled={loading} onChange={(e) => setMaxAskPrice(e.target.value)} />
+                    <b>€</b>
+                  </div>
+                  <small>Never show a listing above this asking price.</small>
+                </label>
+
+                <label className="filterField">
+                  <span>MIN NET PROFIT</span>
+                  <div className="numberInputWrap">
+                    <input type="number" min="0" max="1000000" step="5" inputMode="numeric" placeholder="Any" value={minProfit} disabled={loading} onChange={(e) => setMinProfit(e.target.value)} />
+                    <b>€</b>
+                  </div>
+                  <small>After estimated fees, shipping and repair.</small>
+                </label>
+
                 <label className="filterField">
                   <span>MINIMUM ROI</span>
                   <div className="numberInputWrap">
@@ -383,6 +427,34 @@ export default function SearchPage() {
               <div className="sitePreferenceBlock">
                 <div className="sitePreferenceHead">
                   <div>
+                    <span>CONDITION / WORK YOU ACCEPT</span>
+                    <p>This changes what UnderAsk hunts for. Repair cost is still included in the server-side profit calculation.</p>
+                  </div>
+                </div>
+                <div className="siteChoices">
+                  {CONDITION_OPTIONS.map((option) => {
+                    const selected = conditionPreference === option.id;
+                    return (
+                      <button
+                        type="button"
+                        key={option.id}
+                        className={selected ? "siteChoice selected" : "siteChoice"}
+                        aria-pressed={selected}
+                        disabled={loading}
+                        onClick={() => setConditionPreference(option.id)}
+                        title={option.note}
+                      >
+                        <span className="siteCheck">{selected ? "✓" : "+"}</span>
+                        {option.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="sitePreferenceBlock">
+                <div className="sitePreferenceHead">
+                  <div>
                     <span>MARKETPLACE PRIORITY</span>
                     <p>
                       {planRule.maxSites === null
@@ -398,11 +470,7 @@ export default function SearchPage() {
                 <div className="siteChoices">
                   {SITE_OPTIONS.map((site) => {
                     const selected = preferredSites.includes(site.id);
-                    const atLimit =
-                      !selected &&
-                      planRule.maxSites !== null &&
-                      preferredSites.length >= planRule.maxSites;
-
+                    const atLimit = !selected && planRule.maxSites !== null && preferredSites.length >= planRule.maxSites;
                     return (
                       <button
                         type="button"
@@ -458,9 +526,9 @@ export default function SearchPage() {
 
         <div className="chips">
           {[
-            "Find camera flips in the Netherlands with 20%+ ROI",
+            "Find camera flips in the Netherlands",
             "Find cheap Polo 9N3 GTI parts in Europe",
-            "I have €500. Find the best things to flip",
+            "Find the best things to flip with €500",
           ].map((example) => (
             <button key={example} type="button" disabled={loading} onClick={() => setQuery(example)}>{example}</button>
           ))}
