@@ -18,6 +18,13 @@ const SITE_LABELS: Record<string, string> = {
   autoscout24: "AutoScout24",
 };
 
+const CONDITION_LABELS: Record<string, string> = {
+  any: "Any condition is acceptable if the economics are strong.",
+  ready: "Prefer working, complete items that need no meaningful repair before resale. Exclude broken or parts-only projects.",
+  cosmetic_ok: "Working items with cosmetic wear or easy detailing work are acceptable, but avoid meaningful repair projects.",
+  repair_ok: "Repair projects and damaged items are acceptable when likely repair cost is included conservatively and the margin still works.",
+};
+
 const DEAL_SCHEMA = {
   type: "object",
   properties: {
@@ -87,6 +94,9 @@ type AlertJob = {
   preferred_sites: string[];
   min_roi: number | null;
   min_score: number | null;
+  min_profit: number | null;
+  max_ask_price: number | null;
+  condition_preference: string | null;
   alert_min_score: number;
   plan: string;
 };
@@ -117,13 +127,25 @@ export async function POST(req: Request) {
     const preferredSites = Array.isArray(job.preferred_sites) ? job.preferred_sites : [];
     const preferredLabels = preferredSites.map((site) => SITE_LABELS[site] || site);
     const minRoi = optionalNumber(job.min_roi);
+    const minProfit = optionalNumber(job.min_profit);
+    const maxAskPrice = optionalNumber(job.max_ask_price);
+    const conditionPreference = CONDITION_LABELS[job.condition_preference || ""]
+      ? String(job.condition_preference)
+      : "any";
     const alertMinScore = Math.max(70, optionalNumber(job.alert_min_score) ?? 70);
 
     const preferenceText = preferredLabels.length
       ? `Give extra search priority to these marketplaces: ${preferredLabels.join(", ")}. IMPORTANT: these are preferences, NOT an allowlist. Continue searching the broader public web for stronger listings and comparable evidence.`
       : "No marketplace preference is selected. Search broadly across the public web.";
 
-    const prompt = `You are UnderAsk, a conservative deal-finding engine running a saved-search alert.\nSearch the live public web for REAL second-hand or marketplace listings matching:\n"${job.query}"\n\n${preferenceText}\n${minRoi !== null ? `Target deals likely to achieve at least ${minRoi}% server-calculated ROI.` : ""}\nPrioritize unusually strong, newly discoverable listings because an alert should only fire for high-quality opportunities.\n\nQUALITY STANDARD:\n- Return at most 6 candidate deals; the server independently validates, deduplicates and ranks them.\n- Every candidate MUST use a real DIRECT listing URL, never a search/category/home page.\n- For every candidate, include 2-4 UNIQUE public comparables for the same or genuinely equivalent item/model/version/condition.\n- Every comparable must have a real public URL and numeric EUR price.\n- Prefer genuinely sold/completed evidence; use kind=sold only when the source actually supports that status. Otherwise label asking or market_reference honestly.\n- Never reuse the candidate listing as a comparable.\n- Do not return a candidate if fewer than 2 defensible comparables exist.\n- Never invent URLs, prices, sellers, sold status, condition or evidence.\n- Do NOT calculate expected sale value, quick-sale value, ROI, net profit, price gap or deal score; the server derives these from the comparables and costs.\n- estimated fees, shipping and repair costs must be realistic, or 0 when genuinely not applicable.\n- confidence means confidence in evidence quality, not profit excitement.\n- Numeric money values are EUR; speed_to_sell and confidence are 0-100 integers.\n- If no candidate meets this evidence standard, return an empty deals array.`;
+    const economics = [
+      minRoi !== null ? `Target at least ${minRoi}% server-calculated ROI.` : "",
+      minProfit !== null ? `Target at least €${minProfit} server-calculated NET profit after estimated fees, shipping and repair.` : "",
+      maxAskPrice !== null ? `Candidate asking price must be no more than €${maxAskPrice}.` : "",
+      `CONDITION PREFERENCE: ${CONDITION_LABELS[conditionPreference]}`,
+    ].filter(Boolean).join("\n");
+
+    const prompt = `You are UnderAsk, a conservative deal-finding engine running a saved-search alert.\nSearch the live public web for REAL second-hand or marketplace listings matching:\n"${job.query}"\n\n${preferenceText}\n${economics}\nPrioritize unusually strong, newly discoverable listings because an alert should only fire for high-quality opportunities.\n\nQUALITY STANDARD:\n- Return at most 6 candidate deals; the server independently validates, deduplicates and ranks them.\n- Every candidate MUST use a real DIRECT listing URL, never a search/category/home page.\n- For every candidate, include 2-4 UNIQUE public comparables for the same or genuinely equivalent item/model/version/condition.\n- Every comparable must have a real public URL and numeric EUR price.\n- Prefer genuinely sold/completed evidence; use kind=sold only when the source actually supports that status. Otherwise label asking or market_reference honestly.\n- Never reuse the candidate listing as a comparable.\n- Do not return a candidate if fewer than 2 defensible comparables exist.\n- Never invent URLs, prices, sellers, sold status, condition or evidence.\n- Do NOT calculate expected sale value, quick-sale value, ROI, net profit, price gap or deal score; the server derives these from the comparables and costs.\n- estimated fees, shipping and repair costs must be realistic, or 0 when genuinely not applicable.\n- confidence means confidence in evidence quality, not profit excitement.\n- Numeric money values are EUR; speed_to_sell and confidence are 0-100 integers.\n- If no candidate meets this evidence standard, return an empty deals array.`;
 
     const response = await openai(key, prompt);
     const text = outputText(response);
@@ -137,6 +159,8 @@ export async function POST(req: Request) {
 
     const deals = qualityDeals
       .filter((deal: any) => minRoi === null || deal.roi_percent >= minRoi)
+      .filter((deal: any) => minProfit === null || deal.net_profit >= minProfit)
+      .filter((deal: any) => maxAskPrice === null || deal.ask_price <= maxAskPrice)
       .filter((deal: any) => deal.deal_score >= alertMinScore)
       .sort((a: any, b: any) => b.deal_score - a.deal_score);
 
@@ -146,6 +170,7 @@ export async function POST(req: Request) {
       found: deals.length,
       new_alerts: inserted,
       quality_version: "comparables-v1",
+      reseller_filters: true,
     });
   } catch (error: any) {
     const message = String(error?.message || error?.code || "ALERT_SEARCH_FAILED").slice(0, 400);
