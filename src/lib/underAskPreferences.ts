@@ -8,6 +8,12 @@ export type UnderAskPreferences = {
   completed_at: string | null;
 };
 
+function nullableNumber(value: unknown) {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 export async function fetchUnderAskPreferences(accessToken: string): Promise<UnderAskPreferences | null> {
   const response = await fetch(
     `${OTW_SUPABASE_URL}/rest/v1/underask_onboarding_preferences?select=resell_focus,default_min_roi,default_min_score,primary_marketplace,completed_at&limit=1`,
@@ -27,8 +33,8 @@ export async function fetchUnderAskPreferences(accessToken: string): Promise<Und
 
   return {
     resell_focus: typeof row.resell_focus === "string" ? row.resell_focus : "",
-    default_min_roi: Number.isFinite(Number(row.default_min_roi)) ? Number(row.default_min_roi) : null,
-    default_min_score: Number.isFinite(Number(row.default_min_score)) ? Number(row.default_min_score) : null,
+    default_min_roi: nullableNumber(row.default_min_roi),
+    default_min_score: nullableNumber(row.default_min_score),
     primary_marketplace: typeof row.primary_marketplace === "string" ? row.primary_marketplace : null,
     completed_at: typeof row.completed_at === "string" ? row.completed_at : null,
   };
