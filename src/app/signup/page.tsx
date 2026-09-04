@@ -9,9 +9,9 @@ import {
 } from "@/lib/ownTheWallAuth";
 
 function destination() {
-  if (typeof window === "undefined") return "/pricing";
+  if (typeof window === "undefined") return "/onboarding";
   const next = new URLSearchParams(window.location.search).get("next") || "";
-  return next.startsWith("/") && !next.startsWith("//") ? next : "/pricing";
+  return next.startsWith("/") && !next.startsWith("//") ? next : "/onboarding";
 }
 
 export default function SignupPage() {
@@ -97,8 +97,8 @@ export default function SignupPage() {
           <div className="eyebrow">CREATE YOUR UNDERASK ACCOUNT</div>
           <h1>Find the deal before everyone else.</h1>
           <p className="lede small">
-            Create one account, choose your UnderAsk plan, pay securely through Stripe,
-            then start searching live listings.
+            Create your account, tell UnderAsk what you resell, set sensible search defaults,
+            then choose your plan and start the 7-day trial.
           </p>
         </div>
 
@@ -112,8 +112,8 @@ export default function SignupPage() {
                 We sent a confirmation email to <strong>{successEmail}</strong>.
               </div>
               <p>
-                Confirm your email address, then return to UnderAsk and sign in. Your
-                account will use the same secure identity system as OWN THE WALL.
+                Confirm your email address, then sign in. UnderAsk will take you straight
+                into the short deal-preference setup before you choose a plan.
               </p>
               <a className="buttonPrimary" href={loginHref}>Go to sign in</a>
             </div>
@@ -171,8 +171,8 @@ export default function SignupPage() {
           ) : null}
 
           <p className={styles.loginFootnote}>
-            Creating an account does not start a paid subscription. You choose a plan
-            separately and Stripe only charges you after you complete Checkout.
+            Creating an account does not start a paid subscription. The 7-day trial only
+            starts after you choose a plan and complete Stripe Checkout.
           </p>
         </div>
       </section>
