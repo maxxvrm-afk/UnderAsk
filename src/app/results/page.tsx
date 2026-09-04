@@ -9,6 +9,14 @@ import {
 import { saveUnderAskSearch } from "@/lib/underAskSavedSearches";
 import { getNoResultsAdvice } from "@/lib/searchGuidance";
 
+type Comparable = {
+  title: string;
+  url: string;
+  source: string;
+  price: number;
+  kind: "sold" | "asking" | "market_reference";
+};
+
 type Deal = {
   title: string;
   url: string;
@@ -28,6 +36,8 @@ type Deal = {
   reasoning: string;
   risks?: string[];
   evidence?: string[];
+  comparables?: Comparable[];
+  listing_check?: "reachable" | "unverified";
 };
 
 type StoredSearch = {
@@ -41,6 +51,9 @@ type StoredSearch = {
     preferred_sites?: string[];
     plan?: string;
     subscription_status?: string;
+    quality_version?: string;
+    comparables_required?: number;
+    listing_url_checks?: boolean;
     usage?: {
       used?: number;
       limit?: number;
@@ -85,6 +98,12 @@ function searchConfig(result: StoredSearch) {
     : labels.map((site) => LABEL_TO_SITE[site] || site).filter(Boolean);
 
   return { minRoi, minScore, preferredSites };
+}
+
+function comparableLabel(kind: Comparable["kind"]) {
+  if (kind === "sold") return "SOLD";
+  if (kind === "asking") return "ASKING";
+  return "MARKET";
 }
 
 export default function ResultsPage() {
@@ -274,6 +293,11 @@ export default function ResultsPage() {
           <div>
             <h1>{deals.length ? `${deals.length} deals found.` : "No strong deals found."}</h1>
             <p className="lede small resultsQuery">“{result.query}”</p>
+            {result.meta?.quality_version && (
+              <p className="lede small" style={{ marginTop: 8 }}>
+                Quality checked · minimum {result.meta.comparables_required || 2} comparables per deal · duplicate filtering active.
+              </p>
+            )}
             {typeof remaining === "number" && typeof limit === "number" && (
               <p className="lede small" style={{ marginTop: 8 }}>
                 {remaining} of {limit} searches remaining in your current allowance.
@@ -324,7 +348,7 @@ export default function ResultsPage() {
 
               <div className="metrics">
                 <div className="metric"><span>ASK</span><strong>€{deal.ask_price}</strong></div>
-                <div className="metric"><span>EXPECTED SALE</span><strong>€{deal.expected_sale_price}</strong></div>
+                <div className="metric"><span>COMP-BASED SALE</span><strong>€{deal.expected_sale_price}</strong></div>
                 <div className="metric"><span>NET PROFIT</span><strong className="accent">€{deal.net_profit}</strong></div>
                 <div className="metric"><span>ROI</span><strong className="accent">{deal.roi_percent}%</strong></div>
                 <div className="metric"><span>QUICK SALE</span><strong>€{deal.quick_sale_price}</strong></div>
@@ -341,10 +365,59 @@ export default function ResultsPage() {
                   <p>{deal.risks?.[0] || "No major risk flagged."}</p>
                 </div>
                 <div>
-                  <span className="detailLabel">MARKET EVIDENCE</span>
-                  <p>{deal.evidence?.[0] || "Based on current public market evidence."}</p>
+                  <span className="detailLabel">LISTING CHECK</span>
+                  <p>
+                    {deal.listing_check === "reachable"
+                      ? "Listing URL responded successfully during this search."
+                      : "Direct URL found by live search; independent URL check was blocked or inconclusive."}
+                  </p>
                 </div>
               </div>
+
+              {Array.isArray(deal.comparables) && deal.comparables.length >= 2 && (
+                <div
+                  style={{
+                    marginTop: 18,
+                    paddingTop: 16,
+                    borderTop: "1px solid rgba(255,255,255,.10)",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
+                    <span className="detailLabel">VALUE EVIDENCE</span>
+                    <span className="source">{deal.comparables.length} COMPARABLES</span>
+                  </div>
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {deal.comparables.map((comp, compIndex) => (
+                      <a
+                        key={`${comp.url}-${compIndex}`}
+                        href={comp.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: 14,
+                          padding: "10px 12px",
+                          border: "1px solid rgba(255,255,255,.10)",
+                          borderRadius: 10,
+                          color: "inherit",
+                          textDecoration: "none",
+                          background: "rgba(255,255,255,.025)",
+                        }}
+                      >
+                        <span style={{ minWidth: 0 }}>
+                          <strong style={{ display: "block", fontSize: 12 }}>{comp.title}</strong>
+                          <span style={{ display: "block", marginTop: 2, fontSize: 10, opacity: 0.58 }}>
+                            {comparableLabel(comp.kind)} · {comp.source}
+                          </span>
+                        </span>
+                        <strong style={{ whiteSpace: "nowrap" }}>€{comp.price}</strong>
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <a className="openLink" href={deal.url} target="_blank" rel="noreferrer">
                 Open listing →
