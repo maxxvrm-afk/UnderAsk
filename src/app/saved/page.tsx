@@ -24,6 +24,13 @@ const SITE_NAMES: Record<string, string> = {
   autoscout24: "AutoScout24",
 };
 
+const CONDITION_NAMES: Record<string, string> = {
+  any: "Any condition",
+  ready: "Ready to resell",
+  cosmetic_ok: "Cosmetic work OK",
+  repair_ok: "Repair projects OK",
+};
+
 function formatDate(value: string | null) {
   if (!value) return "";
   const date = new Date(value);
@@ -90,6 +97,9 @@ export default function SavedSearchesPage() {
           query: search.query,
           minRoi: search.minRoi,
           minScore: search.minScore,
+          minProfit: search.minProfit,
+          maxAskPrice: search.maxAskPrice,
+          conditionPreference: search.conditionPreference,
           preferredSites: search.preferredSites,
         }),
       });
@@ -118,6 +128,9 @@ export default function SavedSearchesPage() {
           filters: {
             minRoi: search.minRoi,
             minScore: search.minScore,
+            minProfit: search.minProfit,
+            maxAskPrice: search.maxAskPrice,
+            conditionPreference: search.conditionPreference,
             preferredSiteIds: search.preferredSites,
             preferredSites: search.preferredSites.map((site) => SITE_NAMES[site] || site),
           },
@@ -161,7 +174,7 @@ export default function SavedSearchesPage() {
 
       setMessage(
         state.enabled
-          ? `Deal Alert enabled. ${state.activeCount}/${state.maxActive} active on your plan; checking about every ${state.frequencyHours}h.`
+          ? `Deal Alert enabled. ${state.activeCount}/${state.maxActive} active on your plan; checking about every ${state.frequencyHours}h with the same budget/profit filters.`
           : "Deal Alert disabled.",
       );
     } catch (err) {
@@ -202,7 +215,7 @@ export default function SavedSearchesPage() {
         <div className="eyebrow">SAVED SEARCHES + DEAL ALERTS</div>
         <h1>Your repeatable deal hunts.</h1>
         <p className="lede small">
-          Save a search once. Turn on Deal Alerts and UnderAsk will automatically check for new high-score listings without using your manual search quota.
+          Saved searches now keep the actual economics too: buying budget, required net profit, ROI, score and acceptable condition.
         </p>
 
         {loading && <p className="lede small">Loading saved searches...</p>}
@@ -221,8 +234,11 @@ export default function SavedSearchesPage() {
           <div style={{ display: "grid", gap: 12, marginTop: 30, textAlign: "left" }}>
             {items.map((item) => {
               const filters = [
+                item.maxAskPrice !== null ? `Buy ≤ €${item.maxAskPrice}` : null,
+                item.minProfit !== null ? `Profit ≥ €${item.minProfit}` : null,
                 item.minRoi !== null ? `ROI ≥ ${item.minRoi}%` : null,
                 item.minScore !== null ? `Score ≥ ${item.minScore}` : null,
+                item.conditionPreference !== "any" ? CONDITION_NAMES[item.conditionPreference] : null,
                 item.preferredSites.length
                   ? item.preferredSites.map((site) => SITE_NAMES[site] || site).join(" · ")
                   : "Broad web",
@@ -243,9 +259,7 @@ export default function SavedSearchesPage() {
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 18, alignItems: "flex-start", flexWrap: "wrap" }}>
                     <div style={{ minWidth: 0, flex: "1 1 560px" }}>
                       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 7 }}>
-                        <span style={{ fontSize: 11, letterSpacing: ".08em", opacity: .55 }}>
-                          SAVED {formatDate(item.createdAt)}
-                        </span>
+                        <span style={{ fontSize: 11, letterSpacing: ".08em", opacity: .55 }}>SAVED {formatDate(item.createdAt)}</span>
                         <span
                           style={{
                             fontSize: 10,
@@ -281,15 +295,7 @@ export default function SavedSearchesPage() {
                           </span>
                         ))}
                         {item.alertsEnabled && (
-                          <span
-                            style={{
-                              fontSize: 11,
-                              padding: "5px 8px",
-                              borderRadius: 999,
-                              border: "1px solid rgba(255,255,255,.10)",
-                              opacity: .72,
-                            }}
-                          >
+                          <span style={{ fontSize: 11, padding: "5px 8px", borderRadius: 999, border: "1px solid rgba(255,255,255,.10)", opacity: .72 }}>
                             Alert score ≥ {Math.round(item.alertMinScore)}
                           </span>
                         )}
@@ -302,9 +308,7 @@ export default function SavedSearchesPage() {
                         </p>
                       )}
                       {item.alertLastError && (
-                        <p className="error" style={{ marginTop: 10, fontSize: 12 }}>
-                          Last alert check failed; UnderAsk will retry automatically.
-                        </p>
+                        <p className="error" style={{ marginTop: 10, fontSize: 12 }}>Last alert check failed; UnderAsk will retry automatically.</p>
                       )}
                     </div>
 
@@ -315,11 +319,7 @@ export default function SavedSearchesPage() {
                         disabled={Boolean(runningId || deletingId || togglingId)}
                         onClick={() => toggleAlert(item)}
                       >
-                        {togglingId === item.id
-                          ? "Updating..."
-                          : item.alertsEnabled
-                            ? "Disable alert"
-                            : "Enable alert"}
+                        {togglingId === item.id ? "Updating..." : item.alertsEnabled ? "Disable alert" : "Enable alert"}
                       </button>
                       <button
                         type="button"
