@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import "./account-global.css";
+import "./mobile-nav.css";
 import UnderAskUsageWidget from "@/components/UnderAskUsageWidget";
+import UnderAskMobileNav from "@/components/UnderAskMobileNav";
 
 export const metadata: Metadata = {
   title: "UnderAsk — The search engine for deals",
@@ -9,5 +11,13 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({children}:{children:React.ReactNode}) {
-  return <html lang="en"><body>{children}<UnderAskUsageWidget /></body></html>;
+  return (
+    <html lang="en">
+      <body>
+        {children}
+        <UnderAskUsageWidget />
+        <UnderAskMobileNav />
+      </body>
+    </html>
+  );
 }
