@@ -65,18 +65,17 @@ export default function LoginPage() {
       <nav className="nav">
         <a className="brand" href="/">UnderAsk</a>
         <div className="navLinks">
+          <a href="/scoreboard">Scoreboard</a>
           <a href="/pricing">Pricing</a>
-          <a href="https://ownthewall.co" target="_blank" rel="noreferrer">OWN THE WALL</a>
         </div>
       </nav>
 
       <section className={styles.loginLayout}>
         <div className={styles.loginIntro}>
-          <div className="eyebrow">ONE ACCOUNT · TWO PRODUCTS</div>
+          <div className="eyebrow">UNDERASK ACCOUNT</div>
           <h1>Sign in and start searching.</h1>
           <p className="lede small">
-            UnderAsk uses the same secure account identity as OWN THE WALL. One login
-            can be used across both products.
+            Find deals, track every flip in your Portfolio and compare your wins with the UnderAsk community.
           </p>
         </div>
 
@@ -132,8 +131,7 @@ export default function LoginPage() {
           )}
 
           <p className={styles.loginFootnote}>
-            Existing OWN THE WALL users can sign in here with the same email and password.
-            New UnderAsk accounts are created in the same shared identity system.
+            Already have an OWN THE WALL account? The same email and password still work here because both products use the same secure identity system.
           </p>
         </div>
       </section>
