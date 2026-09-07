@@ -1,6 +1,8 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
+import { getValidOwnTheWallSession } from "@/lib/ownTheWallAuth";
 
 const LINKS = [
   { href: "/search", label: "Search" },
@@ -11,6 +13,25 @@ const LINKS = [
 
 export default function UnderAskMobileNav() {
   const pathname = usePathname();
+  const [signedIn, setSignedIn] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+
+    getValidOwnTheWallSession()
+      .then((session) => {
+        if (mounted) setSignedIn(Boolean(session));
+      })
+      .catch(() => {
+        if (mounted) setSignedIn(false);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [pathname]);
+
+  if (!signedIn) return null;
 
   return (
     <nav className="mobileAppNav" aria-label="UnderAsk mobile navigation">
