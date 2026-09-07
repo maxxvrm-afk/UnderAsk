@@ -65,6 +65,7 @@ export default function LoginPage() {
       <nav className="nav">
         <a className="brand" href="/">UnderAsk</a>
         <div className="navLinks">
+          <a href="/scoreboard">Scoreboard</a>
           <a href="/pricing">Pricing</a>
         </div>
       </nav>
