@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   getValidOwnTheWallSession,
   signOutOwnTheWall,
 } from "@/lib/ownTheWallAuth";
 import { saveUnderAskSearch } from "@/lib/underAskSavedSearches";
+import { createPortfolioDeal } from "@/lib/underAskPortfolio";
 import { getNoResultsAdvice } from "@/lib/searchGuidance";
 
 type Comparable = {
@@ -94,6 +95,16 @@ const CONDITION_LABELS: Record<string, string> = {
   repair_ok: "Repair projects OK",
 };
 
+const EMPTY_PURCHASE = {
+  purchasePrice: "",
+  fuelCost: "",
+  advertisingCost: "",
+  platformFees: "",
+  shippingCost: "",
+  repairCost: "",
+  otherCosts: "",
+};
+
 function searchConfig(result: StoredSearch) {
   const minRoi = result.filters?.minRoi ?? result.meta?.min_roi ?? null;
   const minScore = result.filters?.minScore ?? result.meta?.min_score ?? null;
@@ -123,6 +134,12 @@ function comparableLabel(kind: Comparable["kind"]) {
   return "MARKET";
 }
 
+function moneyInput(value: string) {
+  if (value.trim() === "") return 0;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : NaN;
+}
+
 export default function ResultsPage() {
   const router = useRouter();
   const [result, setResult] = useState<StoredSearch | null>(null);
@@ -131,6 +148,9 @@ export default function ResultsPage() {
   const [rerunning, setRerunning] = useState(false);
   const [actionMessage, setActionMessage] = useState("");
   const [actionError, setActionError] = useState("");
+  const [buyingDeal, setBuyingDeal] = useState<Deal | null>(null);
+  const [addingPurchase, setAddingPurchase] = useState(false);
+  const [purchase, setPurchase] = useState(EMPTY_PURCHASE);
 
   useEffect(() => {
     try {
@@ -248,12 +268,80 @@ export default function ResultsPage() {
     }
   }
 
+  function openBought(deal: Deal) {
+    setActionError("");
+    setActionMessage("");
+    setBuyingDeal(deal);
+    setPurchase({ ...EMPTY_PURCHASE, purchasePrice: String(deal.ask_price) });
+  }
+
+  async function addBoughtDeal(event: FormEvent) {
+    event.preventDefault();
+    if (!buyingDeal || addingPurchase) return;
+
+    const purchasePrice = moneyInput(purchase.purchasePrice);
+    const fuelCost = moneyInput(purchase.fuelCost);
+    const advertisingCost = moneyInput(purchase.advertisingCost);
+    const platformFees = moneyInput(purchase.platformFees);
+    const shippingCost = moneyInput(purchase.shippingCost);
+    const repairCost = moneyInput(purchase.repairCost);
+    const otherCosts = moneyInput(purchase.otherCosts);
+    const values = [purchasePrice, fuelCost, advertisingCost, platformFees, shippingCost, repairCost, otherCosts];
+
+    if (!Number.isFinite(purchasePrice) || purchasePrice <= 0 || values.some((value) => !Number.isFinite(value) || value < 0)) {
+      setActionError("Enter a valid purchase price and non-negative extra costs.");
+      return;
+    }
+
+    setAddingPurchase(true);
+    setActionError("");
+
+    try {
+      const session = await getValidOwnTheWallSession();
+      if (!session) {
+        router.replace("/login?next=/results");
+        return;
+      }
+
+      await createPortfolioDeal(session.access_token, {
+        title: buyingDeal.title,
+        source: buyingDeal.source,
+        sourceUrl: buyingDeal.url,
+        predictedAskPrice: buyingDeal.ask_price,
+        predictedSalePrice: buyingDeal.expected_sale_price,
+        predictedProfit: buyingDeal.net_profit,
+        predictedRoi: buyingDeal.roi_percent,
+        dealScore: buyingDeal.deal_score,
+        purchasePrice,
+        fuelCost,
+        advertisingCost,
+        platformFees,
+        shippingCost,
+        repairCost,
+        otherCosts,
+      });
+
+      setBuyingDeal(null);
+      setPurchase(EMPTY_PURCHASE);
+      setActionMessage("Added to Portfolio. UnderAsk will now track predicted vs actual performance.");
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Could not add this deal to your portfolio.");
+    } finally {
+      setAddingPurchase(false);
+    }
+  }
+
+  const purchaseTotal = Object.values(purchase).reduce((sum, value) => {
+    const parsed = moneyInput(value);
+    return sum + (Number.isFinite(parsed) && parsed > 0 ? parsed : 0);
+  }, 0);
+
   if (!loaded) {
     return (
       <main className="shell">
         <nav className="nav">
           <a className="brand" href="/">UnderAsk</a>
-          <div className="navLinks"><a href="/search">Search</a><a href="/saved">Saved</a><a href="/pricing">Pricing</a></div>
+          <div className="navLinks"><a href="/search">Search</a><a href="/portfolio">Portfolio</a><a href="/feed">Feed</a><a href="/pricing">Pricing</a></div>
         </nav>
         <section className="resultsHero"><div className="eyebrow">LOADING RESULTS</div><h1>Your deals are ready.</h1></section>
       </main>
@@ -265,7 +353,7 @@ export default function ResultsPage() {
       <main className="shell">
         <nav className="nav">
           <a className="brand" href="/">UnderAsk</a>
-          <div className="navLinks"><a href="/search">Search</a><a href="/saved">Saved</a><a href="/pricing">Pricing</a></div>
+          <div className="navLinks"><a href="/search">Search</a><a href="/portfolio">Portfolio</a><a href="/feed">Feed</a><a href="/pricing">Pricing</a></div>
         </nav>
         <section className="resultsHero emptyResults">
           <div className="eyebrow">NO ACTIVE SEARCH</div>
@@ -304,9 +392,11 @@ export default function ResultsPage() {
         <a className="brand" href="/">UnderAsk</a>
         <div className="navLinks">
           <a href="/search">New search</a>
+          <a href="/portfolio">Portfolio</a>
+          <a href="/feed">Wins</a>
+          <a href="/scoreboard">Scoreboard</a>
           <a href="/saved">Saved</a>
           <a href="/history">History</a>
-          <a href="/pricing">Pricing</a>
         </div>
       </nav>
 
@@ -339,7 +429,7 @@ export default function ResultsPage() {
             </button>
           </div>
         </div>
-        {actionMessage && <p className="lede small" style={{ marginTop: 12 }}>{actionMessage}</p>}
+        {actionMessage && <p className="lede small" style={{ marginTop: 12 }}>{actionMessage} <a href="/portfolio">View Portfolio →</a></p>}
         {actionError && <p className="error" style={{ marginTop: 12 }}>{actionError}</p>}
       </section>
 
@@ -417,10 +507,95 @@ export default function ResultsPage() {
                 </div>
               )}
 
-              <a className="openLink" href={deal.url} target="_blank" rel="noreferrer">Open listing →</a>
+              <div style={{ display: "flex", gap: 9, flexWrap: "wrap", marginTop: 18 }}>
+                <button className="buttonPrimary" type="button" onClick={() => openBought(deal)}>Bought this</button>
+                <a className="openLink" href={deal.url} target="_blank" rel="noreferrer">Open listing →</a>
+              </div>
             </article>
           ))}
         </section>
+      )}
+
+      {buyingDeal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,.78)",
+            display: "grid", placeItems: "center", padding: 18, overflowY: "auto",
+          }}
+        >
+          <form
+            onSubmit={addBoughtDeal}
+            style={{
+              width: "min(720px,100%)", padding: 22, borderRadius: 18,
+              border: "1px solid rgba(255,255,255,.14)", background: "#0d0d0d",
+              boxShadow: "0 30px 90px rgba(0,0,0,.45)",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 14, alignItems: "flex-start" }}>
+              <div>
+                <div className="eyebrow">ADD TO PORTFOLIO</div>
+                <h2 style={{ margin: "7px 0 5px" }}>Bought this?</h2>
+                <p style={{ margin: 0, opacity: .68, lineHeight: 1.45 }}>{buyingDeal.title}</p>
+              </div>
+              <button className="buttonGhost" type="button" disabled={addingPurchase} onClick={() => setBuyingDeal(null)}>Close</button>
+            </div>
+
+            <p style={{ margin: "18px 0 0", fontSize: 13, opacity: .68 }}>
+              Enter what you actually paid and every direct cost. You can change these later in Portfolio.
+            </p>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: 10, marginTop: 16 }}>
+              {[
+                ["purchasePrice", "PURCHASE PRICE", "What you paid"],
+                ["fuelCost", "FUEL / TRAVEL", "Petrol, train, tolls"],
+                ["advertisingCost", "ADVERTISING", "Boosts / paid ads"],
+                ["repairCost", "REPAIR / PARTS", "Parts, paint, repair"],
+                ["platformFees", "PLATFORM / PAYMENT FEES", "Marketplace / payment fees"],
+                ["shippingCost", "SHIPPING", "Collection / shipping"],
+                ["otherCosts", "OTHER COSTS", "Everything else"],
+              ].map(([key, label, note]) => (
+                <label className="filterField" key={key} style={{ margin: 0 }}>
+                  <span>{label}</span>
+                  <div className="numberInputWrap">
+                    <b>€</b>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      inputMode="decimal"
+                      placeholder={key === "purchasePrice" ? "0.00" : "0"}
+                      value={purchase[key as keyof typeof purchase]}
+                      disabled={addingPurchase}
+                      onChange={(event) => setPurchase((current) => ({ ...current, [key]: event.target.value }))}
+                    />
+                  </div>
+                  <small>{note}</small>
+                </label>
+              ))}
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, marginTop: 18, padding: 15, borderRadius: 14, background: "rgba(255,255,255,.045)" }}>
+              <span>
+                <span className="detailLabel">TOTAL INVESTED SO FAR</span>
+                <strong style={{ display: "block", fontSize: 24, marginTop: 4 }}>€{purchaseTotal.toFixed(2)}</strong>
+              </span>
+              <span style={{ textAlign: "right", fontSize: 12, opacity: .6 }}>
+                UnderAsk predicted €{buyingDeal.expected_sale_price} sale<br />and €{buyingDeal.net_profit} net profit.
+              </span>
+            </div>
+
+            {actionError && <p className="error" style={{ marginTop: 13 }}>{actionError}</p>}
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 9, marginTop: 18 }}>
+              <button className="buttonGhost" type="button" disabled={addingPurchase} onClick={() => setBuyingDeal(null)}>Cancel</button>
+              <button className="buttonPrimary" type="submit" disabled={addingPurchase}>
+                {addingPurchase ? "Adding..." : "Add to Portfolio"}
+              </button>
+            </div>
+          </form>
+        </div>
       )}
     </main>
   );
