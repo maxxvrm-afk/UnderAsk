@@ -108,7 +108,7 @@ export default function HistoryPage() {
         {!loading && !error && history.length === 0 && (
           <div className="subscriptionGateCard" style={{ marginTop: 28 }}>
             <strong>No searches yet.</strong>
-            <p>Your completed and failed UnderAsk searches will appear here.</p>
+            <p>Your completed, failed and refunded UnderAsk searches will appear here.</p>
             <a className="buttonPrimary" href="/search">Start searching</a>
           </div>
         )}
@@ -159,14 +159,16 @@ export default function HistoryPage() {
                       </div>
                     </div>
 
-                    <div style={{ textAlign: "right", minWidth: 110 }}>
+                    <div style={{ textAlign: "right", minWidth: 130 }}>
                       <strong style={{ display: "block", fontSize: 12, textTransform: "uppercase" }}>
                         {item.status}
                       </strong>
                       <span style={{ display: "block", marginTop: 5, fontSize: 12, opacity: .58 }}>
-                        {item.resultCount === null
-                          ? item.status === "failed" ? "Search failed" : "Processing"
-                          : `${item.resultCount} deal${item.resultCount === 1 ? "" : "s"}`}
+                        {item.status === "refunded"
+                          ? "Technical failure · credit returned"
+                          : item.resultCount === null
+                            ? item.status === "failed" ? "Search failed" : "Processing"
+                            : `${item.resultCount} deal${item.resultCount === 1 ? "" : "s"}`}
                       </span>
                     </div>
                   </div>
