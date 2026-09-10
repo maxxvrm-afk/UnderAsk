@@ -16,7 +16,7 @@ export type UnderAskSearchHistoryItem = {
   preferredSites: string[];
   minRoi: number | null;
   minScore: number | null;
-  status: "started" | "completed" | "failed";
+  status: "started" | "completed" | "failed" | "refunded";
   resultCount: number | null;
   errorCode: string | null;
   createdAt: string;
@@ -105,7 +105,9 @@ export async function fetchUnderAskSearchHistory(
     minRoi: nullableNumber(row?.min_roi),
     minScore: nullableNumber(row?.min_score),
     status:
-      row?.status === "completed" || row?.status === "failed" ? row.status : "started",
+      row?.status === "completed" || row?.status === "failed" || row?.status === "refunded"
+        ? row.status
+        : "started",
     resultCount: nullableNumber(row?.result_count),
     errorCode: typeof row?.error_code === "string" ? row.error_code : null,
     createdAt: typeof row?.created_at === "string" ? row.created_at : "",
