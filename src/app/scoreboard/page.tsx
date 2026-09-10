@@ -128,9 +128,9 @@ export default function ScoreboardPage() {
 
       <section className="searchHero" style={{ maxWidth: 1040 }}>
         <div className="eyebrow">PUBLIC COMMUNITY SCOREBOARD</div>
-        <h1>See what UnderAsk traders are making.</h1>
+        <h1>Who is actually flipping best?</h1>
         <p className="lede small">
-          Real Portfolio results from traders who chose to appear publicly. See the profit and ROI being captured before you decide whether UnderAsk is worth it for you.
+          Public rankings from sold Portfolio flips shared by users who chose to appear here.
         </p>
 
         <div className="metrics" style={{ marginTop: 28 }}>
@@ -140,19 +140,8 @@ export default function ScoreboardPage() {
           <div className="metric"><span>BEST FLIP ROI</span><strong className="accent">{summary ? `${summary.bestRoi.toFixed(1)}%` : "—"}</strong></div>
         </div>
         <p className="lede small" style={{ marginTop: 10, fontSize: 12, opacity: .62 }}>
-          Results are self-reported from sold Portfolio flips and only include users who explicitly opted into the public scoreboard. Past performance does not guarantee future results.
+          Results are self-reported and only include users who explicitly opted in. Past performance does not guarantee future results.
         </p>
-
-        {!session && (
-          <div className="subscriptionGateCard" style={{ marginTop: 26, textAlign: "left" }}>
-            <strong>How much are you leaving on the table?</strong>
-            <p>Start with 7 days and up to 10 live searches. Track every deal from purchase to actual profit.</p>
-            <div style={{ display: "flex", gap: 9, flexWrap: "wrap", marginTop: 14 }}>
-              <a className="buttonPrimary" href="/pricing">Start 7-day free trial</a>
-              <a className="buttonGhost" href="/signup?next=/pricing">Create account</a>
-            </div>
-          </div>
-        )}
 
         {session && (
           <form onSubmit={saveProfile} className="subscriptionGateCard" style={{ marginTop: 26, textAlign: "left" }}>
@@ -205,13 +194,6 @@ export default function ScoreboardPage() {
                 <span><small style={{ display: "block", opacity: .5 }}>{metric === "profit" ? "RANK VALUE" : "RANK ROI"}</small><strong className="accent">{metric === "profit" ? euro(row.metricValue) : `${row.metricValue.toFixed(1)}%`}</strong></span>
               </article>
             ))}
-          </div>
-        )}
-
-        {!session && rows.length > 0 && (
-          <div style={{ marginTop: 30, textAlign: "center" }}>
-            <p className="lede small" style={{ margin: "0 auto 16px" }}>They found their flips. What will UnderAsk find for you?</p>
-            <a className="buttonPrimary" href="/pricing">Try UnderAsk free for 7 days</a>
           </div>
         )}
       </section>
