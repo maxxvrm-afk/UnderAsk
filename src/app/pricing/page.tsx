@@ -133,6 +133,7 @@ export default function Pricing() {
       trial_used_at: current?.trial_used_at || null,
       trial_end: update.trial_end,
       cancel_at_period_end: update.cancel_at_period_end,
+      access_source: current?.access_source || "stripe",
     }));
     setBillingInterval(update.billing_interval);
   }
@@ -143,6 +144,11 @@ export default function Pricing() {
 
     if (!session) {
       router.push("/login?next=/pricing");
+      return;
+    }
+
+    if (entitlement?.access_source === "beta") {
+      router.push("/search");
       return;
     }
 
@@ -193,7 +199,7 @@ export default function Pricing() {
   }
 
   async function cancelSubscription() {
-    if (!session || !entitlement) return;
+    if (!session || !entitlement || entitlement.access_source === "beta") return;
 
     const confirmed = window.confirm(
       entitlement.subscription_status === "trialing"
@@ -221,7 +227,7 @@ export default function Pricing() {
   }
 
   async function keepSubscription() {
-    if (!session) return;
+    if (!session || entitlement?.access_source === "beta") return;
 
     setError("");
     setNotice("");
@@ -237,11 +243,15 @@ export default function Pricing() {
     }
   }
 
+  const isBeta = entitlement?.access_source === "beta";
   const hasSubscription = Boolean(
+    entitlement && !isBeta && subscriptionHasAccess(entitlement.subscription_status),
+  );
+  const hasAccess = Boolean(
     entitlement && subscriptionHasAccess(entitlement.subscription_status),
   );
-  const trialEligible = !entitlement?.trial_used_at && !hasSubscription;
-  const isTrialing = entitlement?.subscription_status === "trialing";
+  const trialEligible = !isBeta && !entitlement?.trial_used_at && !hasSubscription;
+  const isTrialing = !isBeta && entitlement?.subscription_status === "trialing";
   const busy = Boolean(loadingPlan || billingAction);
 
   return (
@@ -255,11 +265,14 @@ export default function Pricing() {
       </nav>
 
       <section className="searchHero pricingHero">
-        <div className="eyebrow">7-DAY FREE TRIAL · 10 SEARCHES</div>
-        <h1>Choose your edge.</h1>
+        <div className="eyebrow">
+          {isBeta ? "INTERNAL BETA ACCESS · BUSINESS" : "7-DAY FREE TRIAL · 10 SEARCHES"}
+        </div>
+        <h1>{isBeta ? "Business access enabled." : "Choose your edge."}</h1>
         <p className="lede small">
-          New accounts get one 7-day free trial with up to 10 live searches.
-          A payment method is required; cancel before the trial ends and you will not be charged.
+          {isBeta
+            ? "Your internal beta access is separate from Stripe billing. Use UnderAsk normally while we validate real searches, alerts, portfolio tracking and capacity."
+            : "New accounts get one 7-day free trial with up to 10 live searches. A payment method is required; cancel before the trial ends and you will not be charged."}
         </p>
 
         <div
@@ -272,12 +285,13 @@ export default function Pricing() {
             border: "1px solid rgba(255,255,255,.12)",
             borderRadius: 999,
             marginTop: 18,
+            opacity: isBeta ? 0.45 : 1,
           }}
         >
           <button
             type="button"
             className={billingInterval === "month" ? "buttonPrimary compactButton" : "buttonGhost compactButton"}
-            disabled={busy}
+            disabled={busy || isBeta}
             onClick={() => setBillingInterval("month")}
           >
             Monthly
@@ -285,7 +299,7 @@ export default function Pricing() {
           <button
             type="button"
             className={billingInterval === "year" ? "buttonPrimary compactButton" : "buttonGhost compactButton"}
-            disabled={busy}
+            disabled={busy || isBeta}
             onClick={() => setBillingInterval("year")}
           >
             Yearly · 2 months free
@@ -295,13 +309,27 @@ export default function Pricing() {
         {!checking && session && entitlement && (
           <>
             <div className="accountLine">
-              <span>{session.user.email || "OWN THE WALL user"}</span>
+              <span>{session.user.email || "UnderAsk user"}</span>
               <span>Current: {planName(entitlement.plan)}</span>
-              <span>Status: {entitlement.subscription_status}</span>
+              <span>Status: {isBeta ? "beta" : entitlement.subscription_status}</span>
               {hasSubscription && <span>Billing: {intervalName(entitlement.billing_interval)}</span>}
             </div>
 
-            {hasSubscription && (
+            {isBeta ? (
+              <div className="subscriptionManager">
+                <div>
+                  <strong>Internal Business beta</strong>
+                  <span>1,500 searches per rolling 30 days · Business search rules · Deal Alerts enabled · Stripe billing unchanged.</span>
+                </div>
+                <button
+                  type="button"
+                  className="buttonPrimary compactButton"
+                  onClick={() => router.push("/search")}
+                >
+                  Go to search
+                </button>
+              </div>
+            ) : hasSubscription ? (
               <div className="subscriptionManager">
                 <div>
                   <strong>
@@ -341,7 +369,7 @@ export default function Pricing() {
                   </button>
                 )}
               </div>
-            )}
+            ) : null}
           </>
         )}
       </section>
@@ -352,9 +380,11 @@ export default function Pricing() {
       <section className="pricingGrid">
         {plans.map((plan) => {
           const current = Boolean(
-            hasSubscription &&
-            entitlement?.plan === plan.id &&
-            entitlement?.billing_interval === billingInterval,
+            isBeta
+              ? entitlement?.plan === plan.id
+              : hasSubscription &&
+                entitlement?.plan === plan.id &&
+                entitlement?.billing_interval === billingInterval,
           );
           const loading = loadingPlan === plan.id;
           const price = billingInterval === "year" ? plan.annualPrice : plan.monthlyPrice;
@@ -377,24 +407,28 @@ export default function Pricing() {
               <button
                 type="button"
                 className={plan.featured ? "buttonPrimary" : "buttonGhost"}
-                disabled={busy || checking}
+                disabled={busy || checking || Boolean(isBeta && !current)}
                 onClick={() => choosePlan(plan.id)}
               >
                 {checking
                   ? "Checking account..."
-                  : loading
-                    ? hasSubscription
-                      ? "Updating subscription..."
-                      : "Opening Stripe..."
-                    : current
-                      ? "Current plan · go to search"
-                      : hasSubscription
-                        ? `Switch to ${plan.name}`
-                        : session
-                          ? trialEligible
-                            ? `Start 7-day free trial`
-                            : `Subscribe to ${plan.name}`
-                          : "Sign in to start free trial"}
+                  : isBeta
+                    ? current
+                      ? "Beta Business · go to search"
+                      : "Beta access active"
+                    : loading
+                      ? hasSubscription
+                        ? "Updating subscription..."
+                        : "Opening Stripe..."
+                      : current
+                        ? "Current plan · go to search"
+                        : hasSubscription
+                          ? `Switch to ${plan.name}`
+                          : session
+                            ? trialEligible
+                              ? "Start 7-day free trial"
+                              : `Subscribe to ${plan.name}`
+                            : "Sign in to start free trial"}
               </button>
             </article>
           );
@@ -402,7 +436,9 @@ export default function Pricing() {
       </section>
 
       <p className="lede small" style={{ textAlign: "center", margin: "24px auto 0", maxWidth: 760 }}>
-        Free trial is available once per account. Trial includes up to 10 manual searches; Deal Alerts unlock after the paid subscription starts.
+        {isBeta
+          ? "Internal beta access does not start a trial, create a Stripe subscription or change the underlying billing entitlement."
+          : "Free trial is available once per account. Trial includes up to 10 manual searches; Deal Alerts unlock after the paid subscription starts."}
       </p>
     </main>
   );
