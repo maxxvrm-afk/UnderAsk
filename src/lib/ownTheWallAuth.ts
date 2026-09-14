@@ -22,6 +22,7 @@ export type UnderAskEntitlement = {
   trial_used_at: string | null;
   trial_end: string | null;
   cancel_at_period_end: boolean;
+  access_source: "stripe" | "beta";
 };
 
 export type SignUpResult = {
@@ -149,20 +150,20 @@ export async function getValidOwnTheWallSession(): Promise<OtwSession | null> {
 }
 
 export async function fetchUnderAskEntitlement(accessToken: string): Promise<UnderAskEntitlement> {
-  const response = await fetch(
-    `${OTW_SUPABASE_URL}/rest/v1/underask_entitlements?select=plan,billing_interval,subscription_status,current_period_end,trial_used_at,trial_end,cancel_at_period_end&limit=1`,
-    {
-      headers: {
-        apikey: OTW_PUBLISHABLE_KEY,
-        Authorization: `Bearer ${accessToken}`,
-      },
-      cache: "no-store",
+  const response = await fetch(`${OTW_SUPABASE_URL}/rest/v1/rpc/underask_my_entitlement`, {
+    method: "POST",
+    headers: {
+      apikey: OTW_PUBLISHABLE_KEY,
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
     },
-  );
+    body: "{}",
+    cache: "no-store",
+  });
 
   if (!response.ok) throw new Error("Could not load your UnderAsk plan.");
-  const rows = await response.json();
-  const row = Array.isArray(rows) ? rows[0] : null;
+  const data = await response.json();
+  const row = Array.isArray(data) ? data[0] : data;
 
   return {
     plan:
@@ -181,6 +182,7 @@ export async function fetchUnderAskEntitlement(accessToken: string): Promise<Und
     trial_used_at: typeof row?.trial_used_at === "string" ? row.trial_used_at : null,
     trial_end: typeof row?.trial_end === "string" ? row.trial_end : null,
     cancel_at_period_end: Boolean(row?.cancel_at_period_end),
+    access_source: row?.access_source === "beta" ? "beta" : "stripe",
   };
 }
 
