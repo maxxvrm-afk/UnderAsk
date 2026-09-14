@@ -2,92 +2,23 @@ import { NextRequest, NextResponse } from "next/server";
 import { normalizePlan, SEARCH_PLAN_RULES } from "@/lib/searchPlans";
 import { OTW_PUBLISHABLE_KEY, OTW_SUPABASE_URL } from "@/lib/ownTheWallConfig";
 import { processDealCandidates } from "@/lib/dealQuality";
+import {
+  CONDITION_LABELS,
+  DEAL_SCHEMA,
+  SITE_LABELS,
+  UNDERASK_DEAL_MODEL,
+} from "@/lib/underAskDealAiConfig";
+import {
+  OpenAIRequestError,
+  outputText,
+  runOpenAIDealRequest,
+  type OpenAITelemetry,
+} from "@/lib/openAiDealTelemetry";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const MODEL = process.env.OPENAI_DEAL_MODEL || "gpt-5.6-luna";
-
-const SITE_LABELS: Record<string, string> = {
-  marktplaats: "Marktplaats",
-  ebay: "eBay",
-  "2dehands": "2dehands",
-  kleinanzeigen: "Kleinanzeigen",
-  vinted: "Vinted",
-  catawiki: "Catawiki",
-  facebook: "Facebook Marketplace",
-  autoscout24: "AutoScout24",
-};
-
-const CONDITION_LABELS: Record<string, string> = {
-  any: "Any condition is acceptable if the economics are strong.",
-  ready: "Prefer working, complete items that need no meaningful repair before resale. Exclude broken/parts-only projects.",
-  cosmetic_ok: "Working items with cosmetic wear, scratches or easy detailing work are acceptable, but avoid meaningful mechanical/electronic repair projects.",
-  repair_ok: "Repair projects and damaged items are acceptable when the likely repair cost is included conservatively and the margin still works.",
-};
-
-const DEAL_SCHEMA = {
-  type: "object",
-  properties: {
-    deals: {
-      type: "array",
-      maxItems: 6,
-      items: {
-        type: "object",
-        properties: {
-          title: { type: "string" },
-          url: { type: "string" },
-          source: { type: "string" },
-          ask_price: { type: "number" },
-          estimated_fees: { type: "number" },
-          estimated_shipping: { type: "number" },
-          estimated_repair_cost: { type: "number" },
-          confidence: { type: "integer", minimum: 0, maximum: 100 },
-          speed_to_sell: { type: "integer", minimum: 0, maximum: 100 },
-          reasoning: { type: "string" },
-          risks: { type: "array", items: { type: "string" } },
-          comparables: {
-            type: "array",
-            minItems: 2,
-            maxItems: 4,
-            items: {
-              type: "object",
-              properties: {
-                title: { type: "string" },
-                url: { type: "string" },
-                source: { type: "string" },
-                price: { type: "number" },
-                kind: {
-                  type: "string",
-                  enum: ["sold", "asking", "market_reference"],
-                },
-              },
-              required: ["title", "url", "source", "price", "kind"],
-              additionalProperties: false,
-            },
-          },
-        },
-        required: [
-          "title",
-          "url",
-          "source",
-          "ask_price",
-          "estimated_fees",
-          "estimated_shipping",
-          "estimated_repair_cost",
-          "confidence",
-          "speed_to_sell",
-          "reasoning",
-          "risks",
-          "comparables",
-        ],
-        additionalProperties: false,
-      },
-    },
-  },
-  required: ["deals"],
-  additionalProperties: false,
-} as const;
+const MODEL = UNDERASK_DEAL_MODEL;
 
 type SearchUsage = {
   allowed: boolean;
@@ -99,20 +30,8 @@ type SearchUsage = {
   reason: string | null;
 };
 
-class OpenAIError extends Error {
-  status: number;
-  code: string;
-
-  constructor(status: number, code: string, message: string) {
-    super(message);
-    this.status = status;
-    this.code = code;
-  }
-}
-
 class AuthError extends Error {
   status: number;
-
   constructor(status: number, message: string) {
     super(message);
     this.status = status;
@@ -135,10 +54,7 @@ export async function POST(req: NextRequest) {
     if (error instanceof AuthError) {
       return NextResponse.json({ error: error.message }, { status: error.status });
     }
-    return NextResponse.json(
-      { error: "Could not verify your OWN THE WALL account." },
-      { status: 503 },
-    );
+    return NextResponse.json({ error: "Could not verify your account." }, { status: 503 });
   }
 
   let body: any;
@@ -150,38 +66,25 @@ export async function POST(req: NextRequest) {
 
   const query = typeof body?.query === "string" ? body.query.trim() : "";
   if (!query) {
-    return NextResponse.json(
-      { error: "Enter what kind of deal you want." },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: "Enter what kind of deal you want." }, { status: 400 });
   }
 
   const planRule = SEARCH_PLAN_RULES[entitlement.plan];
   const preferredSites: string[] = Array.isArray(body?.preferredSites)
-    ? [
-        ...new Set<string>(
-          body.preferredSites.filter(
-            (site: unknown): site is string =>
-              typeof site === "string" && Boolean(SITE_LABELS[site]),
-          ),
-        ),
-      ]
+    ? [...new Set<string>(body.preferredSites.filter(
+        (site: unknown): site is string => typeof site === "string" && Boolean(SITE_LABELS[site]),
+      ))]
     : [];
 
   if (preferredSites.length < planRule.minSites) {
     return NextResponse.json(
-      {
-        error: `${planRule.name} requires at least ${planRule.minSites} marketplace${planRule.minSites === 1 ? "" : "s"} to be selected.`,
-      },
+      { error: `${planRule.name} requires at least ${planRule.minSites} marketplace${planRule.minSites === 1 ? "" : "s"} to be selected.` },
       { status: 400 },
     );
   }
-
   if (planRule.maxSites !== null && preferredSites.length > planRule.maxSites) {
     return NextResponse.json(
-      {
-        error: `${planRule.name} allows up to ${planRule.maxSites} selected marketplace${planRule.maxSites === 1 ? "" : "s"}.`,
-      },
+      { error: `${planRule.name} allows up to ${planRule.maxSites} selected marketplace${planRule.maxSites === 1 ? "" : "s"}.` },
       { status: 400 },
     );
   }
@@ -213,6 +116,13 @@ export async function POST(req: NextRequest) {
     if (error instanceof AuthError) {
       return NextResponse.json({ error: error.message }, { status: error.status });
     }
+    const message = String((error as any)?.message || "");
+    if (message.includes("UNDERASK_AI_CAPACITY")) {
+      return NextResponse.json(
+        { error: "Live search capacity is busy right now. No search credit was used. Try again shortly." },
+        { status: 503 },
+      );
+    }
     console.error("[UnderAsk deals] usage reservation failed", error);
     return NextResponse.json(
       { error: "UnderAsk could not verify your search allowance. Try again." },
@@ -222,23 +132,14 @@ export async function POST(req: NextRequest) {
 
   if (!usage.allowed) {
     if (usage.reason === "subscription_required") {
-      return NextResponse.json(
-        { error: "An active UnderAsk subscription is required before searching." },
-        { status: 402 },
-      );
+      return NextResponse.json({ error: "An active UnderAsk subscription is required before searching." }, { status: 402 });
     }
-
     if (usage.reason === "site_selection_invalid") {
-      return NextResponse.json(
-        { error: "The selected marketplaces are not allowed for your current plan." },
-        { status: 400 },
-      );
+      return NextResponse.json({ error: "The selected marketplaces are not allowed for your current plan." }, { status: 400 });
     }
-
     if (usage.reason === "invalid_query") {
       return NextResponse.json({ error: "Enter a valid search request." }, { status: 400 });
     }
-
     if (usage.reason === "limit_reached") {
       return NextResponse.json(
         {
@@ -249,11 +150,7 @@ export async function POST(req: NextRequest) {
         { status: 429 },
       );
     }
-
-    return NextResponse.json(
-      { error: "This search could not be authorized." },
-      { status: 403 },
-    );
+    return NextResponse.json({ error: "This search could not be authorized." }, { status: 403 });
   }
 
   const preferenceText = preferredLabels.length
@@ -261,22 +158,12 @@ export async function POST(req: NextRequest) {
     : "No marketplace preference is selected. Search broadly across the public web and use the strongest verifiable sources you can find.";
 
   const thresholdText = [
-    minRoi !== null
-      ? `Target deals likely to achieve at least ${minRoi}% server-calculated ROI.`
-      : "",
-    minScore !== null
-      ? `Favor exceptionally strong opportunities because the final server deal-score threshold is ${minScore}/100.`
-      : "",
-    minProfit !== null
-      ? `Target deals likely to produce at least €${minProfit} server-calculated NET profit after estimated fees, shipping and repair.`
-      : "",
-    maxAskPrice !== null
-      ? `The candidate listing purchase/asking price must be no more than €${maxAskPrice}.`
-      : "",
+    minRoi !== null ? `Target deals likely to achieve at least ${minRoi}% server-calculated ROI.` : "",
+    minScore !== null ? `Favor exceptionally strong opportunities because the final server deal-score threshold is ${minScore}/100.` : "",
+    minProfit !== null ? `Target deals likely to produce at least €${minProfit} server-calculated NET profit after estimated fees, shipping and repair.` : "",
+    maxAskPrice !== null ? `The candidate listing purchase/asking price must be no more than €${maxAskPrice}.` : "",
     `CONDITION PREFERENCE: ${CONDITION_LABELS[conditionPreference]}`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  ].filter(Boolean).join("\n");
 
   const prompt = `You are UnderAsk, a conservative deal-finding engine.
 Search the live public web for REAL second-hand or marketplace listings matching:
@@ -286,34 +173,40 @@ ${preferenceText}
 ${thresholdText}
 
 QUALITY STANDARD:
-- Return at most 6 candidate deals. The server will independently validate, deduplicate and rank them, and expose at most 4.
+- Return at most 6 candidate deals. The server independently validates, deduplicates and ranks them, and exposes at most 4.
 - Every candidate MUST have a real DIRECT listing URL found during this live search. Never use a search page, category page, homepage or invented URL.
 - For EACH candidate, find 2-4 UNIQUE public comparables for the same or genuinely equivalent item/model/version/condition.
 - Every comparable MUST have its own real public URL and a numeric EUR price.
-- Prefer sold/completed evidence whenever it is genuinely available. Label it kind=sold only when the source actually supports a sold/completed price. Otherwise use asking or market_reference honestly.
+- Prefer sold/completed evidence whenever genuinely available. Label kind=sold only when the source actually supports sold/completed status; otherwise use asking or market_reference honestly.
 - Never reuse the candidate listing itself as a comparable.
-- Do not return a candidate at all if you cannot find at least 2 defensible comparables.
-- Do not invent listings, prices, URLs, sellers, sold status, condition, or evidence.
+- Do not return a candidate if you cannot find at least 2 defensible comparables.
+- Never invent listings, prices, URLs, sellers, sold status, condition or evidence.
 - Exclude uncertain, stale-looking or unverifiable candidates rather than guessing.
-- Do NOT calculate expected sale value, quick-sale value, ROI, net profit, price gap or deal score. The server derives those from the comparables and costs.
+- Do NOT calculate expected sale value, quick-sale value, ROI, net profit, price gap or deal score. The server derives those from comparables and costs.
 - estimated_fees, estimated_shipping and estimated_repair_cost must be realistic estimates, or 0 when genuinely not applicable.
-- confidence is confidence in the listing + comparable evidence, not excitement about the profit.
+- confidence is confidence in listing + comparable evidence, not excitement about profit.
 - speed_to_sell is a realistic 0-100 estimate.
 - Keep reasoning and risks concise and specific.
 - All numeric money values must be converted to EUR.
 - If no candidate meets this evidence standard, return an empty deals array.`;
 
+  let telemetry: OpenAITelemetry | null = null;
   try {
-    const response = await openai(key, prompt);
-    const text = outputText(response);
+    const ai = await runOpenAIDealRequest({
+      key,
+      model: MODEL,
+      prompt,
+      schema: DEAL_SCHEMA,
+      schemaName: "underask_deals",
+    });
+    telemetry = ai.telemetry;
+    await recordSearchTelemetry(req, usage.searchId, telemetry);
+
+    const text = outputText(ai.body);
     if (!text) throw new Error("EMPTY_MODEL_OUTPUT");
 
     const parsed = JSON.parse(text);
-    const qualityDeals = await processDealCandidates(
-      Array.isArray(parsed?.deals) ? parsed.deals : [],
-      4,
-    );
-
+    const qualityDeals = await processDealCandidates(Array.isArray(parsed?.deals) ? parsed.deals : [], 4);
     const deals = qualityDeals
       .filter((d: any) => minRoi === null || d.roi_percent >= minRoi)
       .filter((d: any) => minScore === null || d.deal_score >= minScore)
@@ -343,18 +236,17 @@ QUALITY STANDARD:
         condition_preference: conditionPreference,
         preferred_sites: preferredLabels,
         broad_web_search: true,
-        identity_source: "OWN THE WALL",
         usage: usagePayload(usage),
       },
     });
   } catch (e: any) {
-    await finishSearch(
-      req,
-      usage.searchId,
-      "failed",
-      null,
-      e instanceof OpenAIError ? e.code : String(e?.message || e?.name || "SEARCH_FAILED"),
-    );
+    if (e instanceof OpenAIRequestError) telemetry = e.telemetry;
+    if (telemetry) await recordSearchTelemetry(req, usage.searchId, telemetry);
+
+    const errorCode = e instanceof OpenAIRequestError
+      ? e.code
+      : String(e?.message || e?.name || "SEARCH_FAILED");
+    await finishSearch(req, usage.searchId, "failed", null, errorCode);
 
     console.error("[UnderAsk deals] search failed", {
       name: e?.name,
@@ -363,36 +255,23 @@ QUALITY STANDARD:
       code: e?.code,
     });
 
-    if (e instanceof OpenAIError) {
+    if (e instanceof OpenAIRequestError) {
       if (e.status === 429) {
         return NextResponse.json(
-          {
-            error:
-              "Search capacity is busy right now. Please retry in about 30–60 seconds.",
-            usage: usagePayload(usage),
-          },
+          { error: "Search capacity is busy right now. Your search credit was returned. Please retry shortly.", usage: usagePayload(usage) },
           { status: 429 },
         );
       }
-
       if (e.status === 401 || e.status === 403) {
         return NextResponse.json(
-          {
-            error:
-              "UnderAsk's search connection is not configured correctly. Check the OpenAI API key and model access in Vercel.",
-            usage: usagePayload(usage),
-          },
+          { error: "UnderAsk's search connection is not configured correctly. Your search credit was returned.", usage: usagePayload(usage) },
           { status: 503 },
         );
       }
     }
 
     return NextResponse.json(
-      {
-        error:
-          "UnderAsk could not complete this search. Try again or use a slightly narrower request.",
-        usage: usagePayload(usage),
-      },
+      { error: "UnderAsk could not complete this search. Your search credit was returned. Try again.", usage: usagePayload(usage) },
       { status: 500 },
     );
   }
@@ -400,63 +279,29 @@ QUALITY STANDARD:
 
 function authToken(req: NextRequest) {
   const authorization = req.headers.get("authorization") || "";
-  return authorization.startsWith("Bearer ")
-    ? authorization.slice(7).trim()
-    : "";
+  return authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
 }
 
 async function getEntitlement(req: NextRequest) {
   const token = authToken(req);
-
-  if (!token) {
-    throw new AuthError(401, "Sign in with your OWN THE WALL account first.");
-  }
+  if (!token) throw new AuthError(401, "Sign in first.");
 
   const response = await fetch(
     `${OTW_SUPABASE_URL}/rest/v1/underask_entitlements?select=plan,subscription_status,current_period_end&limit=1`,
-    {
-      headers: {
-        apikey: OTW_PUBLISHABLE_KEY,
-        Authorization: `Bearer ${token}`,
-      },
-      cache: "no-store",
-    },
+    { headers: { apikey: OTW_PUBLISHABLE_KEY, Authorization: `Bearer ${token}` }, cache: "no-store" },
   );
-
-  if (response.status === 401 || response.status === 403) {
-    throw new AuthError(401, "Your OWN THE WALL session expired. Sign in again.");
-  }
-
-  if (!response.ok) {
-    throw new AuthError(503, "Could not load your UnderAsk plan from OWN THE WALL.");
-  }
+  if (response.status === 401 || response.status === 403) throw new AuthError(401, "Your session expired. Sign in again.");
+  if (!response.ok) throw new AuthError(503, "Could not load your UnderAsk plan.");
 
   const rows = await response.json();
   const row = Array.isArray(rows) ? rows[0] : null;
-  if (!row) {
-    throw new AuthError(402, "Choose an UnderAsk subscription before searching.");
+  if (!row) throw new AuthError(402, "Choose an UnderAsk subscription before searching.");
+
+  const subscriptionStatus = typeof row?.subscription_status === "string" ? row.subscription_status : "inactive";
+  if (!["active", "trialing", "past_due"].includes(subscriptionStatus)) {
+    throw new AuthError(402, "An active UnderAsk subscription is required before searching.");
   }
-
-  const subscriptionStatus =
-    typeof row?.subscription_status === "string"
-      ? row.subscription_status
-      : "inactive";
-
-  if (
-    subscriptionStatus !== "active" &&
-    subscriptionStatus !== "trialing" &&
-    subscriptionStatus !== "past_due"
-  ) {
-    throw new AuthError(
-      402,
-      "An active UnderAsk subscription is required before searching.",
-    );
-  }
-
-  return {
-    plan: normalizePlan(row?.plan),
-    subscriptionStatus,
-  };
+  return { plan: normalizePlan(row?.plan), subscriptionStatus };
 }
 
 async function reserveSearch(
@@ -470,15 +315,11 @@ async function reserveSearch(
   conditionPreference: string,
 ): Promise<SearchUsage> {
   const token = authToken(req);
-  if (!token) throw new AuthError(401, "Sign in with your OWN THE WALL account first.");
+  if (!token) throw new AuthError(401, "Sign in first.");
 
   const response = await fetch(`${OTW_SUPABASE_URL}/rest/v1/rpc/underask_reserve_search`, {
     method: "POST",
-    headers: {
-      apikey: OTW_PUBLISHABLE_KEY,
-      Authorization: `Bearer ${token}`,
-      "content-type": "application/json",
-    },
+    headers: { apikey: OTW_PUBLISHABLE_KEY, Authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify({
       p_query: query,
       p_preferred_sites: preferredSites,
@@ -491,15 +332,15 @@ async function reserveSearch(
     cache: "no-store",
   });
 
-  if (response.status === 401 || response.status === 403) {
-    throw new AuthError(401, "Your OWN THE WALL session expired. Sign in again.");
+  if (response.status === 401 || response.status === 403) throw new AuthError(401, "Your session expired. Sign in again.");
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(`USAGE_RESERVE_${response.status}:${detail}`);
   }
-  if (!response.ok) throw new Error(`USAGE_RESERVE_${response.status}`);
 
   const data = await response.json();
   const row = Array.isArray(data) ? data[0] : data;
   if (!row) throw new Error("USAGE_RESERVE_EMPTY");
-
   return {
     allowed: Boolean(row.allowed),
     searchId: typeof row.search_id === "string" ? row.search_id : null,
@@ -509,6 +350,34 @@ async function reserveSearch(
     remaining: Number(row.remaining) || 0,
     reason: typeof row.reason === "string" ? row.reason : null,
   };
+}
+
+async function recordSearchTelemetry(req: NextRequest, searchId: string | null, t: OpenAITelemetry) {
+  if (!searchId) return;
+  const token = authToken(req);
+  if (!token) return;
+  try {
+    const response = await fetch(`${OTW_SUPABASE_URL}/rest/v1/rpc/underask_record_search_ai_telemetry`, {
+      method: "POST",
+      headers: { apikey: OTW_PUBLISHABLE_KEY, Authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        p_search_id: searchId,
+        p_model: MODEL,
+        p_openai_request_id: t.requestId,
+        p_input_tokens: t.inputTokens,
+        p_output_tokens: t.outputTokens,
+        p_remaining_requests: t.remainingRequests,
+        p_remaining_tokens: t.remainingTokens,
+        p_reset_requests: t.resetRequests,
+        p_reset_tokens: t.resetTokens,
+        p_rate_limit_hits: t.rateLimitHits,
+      }),
+      cache: "no-store",
+    });
+    if (!response.ok) console.error("[UnderAsk deals] telemetry write failed", response.status);
+  } catch (error) {
+    console.error("[UnderAsk deals] telemetry write failed", error);
+  }
 }
 
 async function finishSearch(
@@ -521,15 +390,10 @@ async function finishSearch(
   if (!searchId) return;
   const token = authToken(req);
   if (!token) return;
-
   try {
     const response = await fetch(`${OTW_SUPABASE_URL}/rest/v1/rpc/underask_finish_search`, {
       method: "POST",
-      headers: {
-        apikey: OTW_PUBLISHABLE_KEY,
-        Authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-      },
+      headers: { apikey: OTW_PUBLISHABLE_KEY, Authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify({
         p_search_id: searchId,
         p_status: status,
@@ -538,105 +402,18 @@ async function finishSearch(
       }),
       cache: "no-store",
     });
-
-    if (!response.ok) {
-      console.error("[UnderAsk deals] could not finish usage record", response.status);
-    }
+    if (!response.ok) console.error("[UnderAsk deals] could not finish usage record", response.status);
   } catch (error) {
     console.error("[UnderAsk deals] could not finish usage record", error);
   }
 }
 
 function usagePayload(usage: SearchUsage) {
-  return {
-    used: usage.used,
-    limit: usage.limit,
-    remaining: usage.remaining,
-    period_days: 30,
-  };
-}
-
-async function openai(key: string, prompt: string) {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const r = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${key}`,
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        tools: [{ type: "web_search" }],
-        tool_choice: "required",
-        input: prompt,
-        max_output_tokens: 4200,
-        text: {
-          format: {
-            type: "json_schema",
-            name: "underask_deals",
-            strict: true,
-            schema: DEAL_SCHEMA,
-          },
-        },
-      }),
-      cache: "no-store",
-    });
-
-    if (r.ok) return r.json();
-
-    const raw = await r.text();
-    let detail: any = null;
-    try {
-      detail = JSON.parse(raw);
-    } catch {
-      detail = null;
-    }
-
-    const code =
-      typeof detail?.error?.code === "string"
-        ? detail.error.code
-        : `HTTP_${r.status}`;
-    const message =
-      typeof detail?.error?.message === "string"
-        ? detail.error.message
-        : `OpenAI request failed with status ${r.status}`;
-
-    if (r.status === 429 && attempt < 2) {
-      const retryAfter = Number(r.headers.get("retry-after"));
-      const fallbackMs = 1500 * Math.pow(2, attempt);
-      const retryMs = Number.isFinite(retryAfter)
-        ? Math.min(retryAfter * 1000, 7000)
-        : Math.min(fallbackMs, 7000);
-      await new Promise((resolve) => setTimeout(resolve, retryMs));
-      continue;
-    }
-
-    throw new OpenAIError(r.status, code, message);
-  }
-
-  throw new OpenAIError(429, "RATE_LIMIT", "OpenAI rate limit reached");
-}
-
-function outputText(r: any) {
-  if (typeof r?.output_text === "string" && r.output_text.trim()) {
-    return r.output_text.trim();
-  }
-
-  const parts: string[] = [];
-  for (const item of r?.output || []) {
-    for (const content of item?.content || []) {
-      if (content?.type === "output_text" && typeof content?.text === "string") {
-        parts.push(content.text);
-      }
-    }
-  }
-  return parts.join("\n").trim();
+  return { used: usage.used, limit: usage.limit, remaining: usage.remaining, period_days: 30 };
 }
 
 function clampOptional(value: unknown, min: number, max: number) {
   if (value === null || value === undefined || value === "") return null;
   const number = Number(value);
-  return Number.isFinite(number)
-    ? Math.min(max, Math.max(min, number))
-    : null;
+  return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : null;
 }
