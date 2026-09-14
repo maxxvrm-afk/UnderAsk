@@ -22,7 +22,7 @@ export type UnderAskEntitlement = {
   trial_used_at: string | null;
   trial_end: string | null;
   cancel_at_period_end: boolean;
-  access_source: "stripe" | "beta";
+  access_source?: "stripe" | "beta";
 };
 
 export type SignUpResult = {
