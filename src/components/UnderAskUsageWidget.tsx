@@ -98,7 +98,8 @@ export default function UnderAskUsageWidget() {
 
   const percent = Math.min(100, Math.max(0, (usage.used / usage.limit) * 100));
   const nearLimit = usage.remaining <= Math.max(3, Math.ceil(usage.limit * 0.1));
-  const isTrial = entitlement.subscription_status === "trialing";
+  const isBeta = entitlement.access_source === "beta";
+  const isTrial = !isBeta && entitlement.subscription_status === "trialing";
   const trial = isTrial ? trialProgress(entitlement.trial_end) : null;
 
   return (
@@ -110,7 +111,7 @@ export default function UnderAskUsageWidget() {
         zIndex: 70,
         width: "min(320px, calc(100vw - 28px))",
         padding: "13px 14px",
-        border: isTrial ? "1px solid rgba(255,255,255,.24)" : "1px solid rgba(255,255,255,.14)",
+        border: isTrial || isBeta ? "1px solid rgba(255,255,255,.24)" : "1px solid rgba(255,255,255,.14)",
         borderRadius: 14,
         background: "rgba(8,8,10,.94)",
         backdropFilter: "blur(14px)",
@@ -121,7 +122,7 @@ export default function UnderAskUsageWidget() {
     >
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
         <div>
-          {isTrial && (
+          {(isTrial || isBeta) && (
             <span
               style={{
                 display: "inline-block",
@@ -132,7 +133,9 @@ export default function UnderAskUsageWidget() {
                 opacity: 0.72,
               }}
             >
-              FREE TRIAL · DAY {trial?.day ?? "—"} OF 7
+              {isBeta
+                ? `BETA ACCESS · ${planLabel(entitlement.plan).toUpperCase()}`
+                : `FREE TRIAL · DAY ${trial?.day ?? "—"} OF 7`}
             </span>
           )}
           <strong style={{ display: "block", fontSize: 13, letterSpacing: ".01em" }}>
@@ -141,7 +144,9 @@ export default function UnderAskUsageWidget() {
           <span style={{ display: "block", opacity: 0.58, marginTop: 2 }}>
             {isTrial
               ? `${trial?.remainingLabel ?? "7-day trial"} · ${planLabel(entitlement.plan)}`
-              : `${usage.used.toLocaleString()} used · ${planLabel(entitlement.plan)} · rolling ${usage.periodDays} days`}
+              : isBeta
+                ? `${usage.used.toLocaleString()} used · internal beta · rolling ${usage.periodDays} days`
+                : `${usage.used.toLocaleString()} used · ${planLabel(entitlement.plan)} · rolling ${usage.periodDays} days`}
           </span>
           {isTrial && entitlement.cancel_at_period_end && (
             <span style={{ display: "block", opacity: 0.78, marginTop: 3 }}>
