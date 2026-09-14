@@ -180,7 +180,7 @@ QUALITY STANDARD:
 - Prefer sold/completed evidence whenever genuinely available. Label kind=sold only when the source actually supports sold/completed status; otherwise use asking or market_reference honestly.
 - Never reuse the candidate listing itself as a comparable.
 - Do not return a candidate if you cannot find at least 2 defensible comparables.
-- Never invent listings, prices, URLs, sellers, sold status, condition or evidence.
+- Never invent listings, prices, URLs, sellers, sold status, condition, or evidence.
 - Exclude uncertain, stale-looking or unverifiable candidates rather than guessing.
 - Do NOT calculate expected sale value, quick-sale value, ROI, net profit, price gap or deal score. The server derives those from comparables and costs.
 - estimated_fees, estimated_shipping and estimated_repair_cost must be realistic estimates, or 0 when genuinely not applicable.
@@ -286,22 +286,32 @@ async function getEntitlement(req: NextRequest) {
   const token = authToken(req);
   if (!token) throw new AuthError(401, "Sign in first.");
 
-  const response = await fetch(
-    `${OTW_SUPABASE_URL}/rest/v1/underask_entitlements?select=plan,subscription_status,current_period_end&limit=1`,
-    { headers: { apikey: OTW_PUBLISHABLE_KEY, Authorization: `Bearer ${token}` }, cache: "no-store" },
-  );
+  const response = await fetch(`${OTW_SUPABASE_URL}/rest/v1/rpc/underask_my_entitlement`, {
+    method: "POST",
+    headers: {
+      apikey: OTW_PUBLISHABLE_KEY,
+      Authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
+    body: "{}",
+    cache: "no-store",
+  });
   if (response.status === 401 || response.status === 403) throw new AuthError(401, "Your session expired. Sign in again.");
   if (!response.ok) throw new AuthError(503, "Could not load your UnderAsk plan.");
 
-  const rows = await response.json();
-  const row = Array.isArray(rows) ? rows[0] : null;
+  const data = await response.json();
+  const row = Array.isArray(data) ? data[0] : data;
   if (!row) throw new AuthError(402, "Choose an UnderAsk subscription before searching.");
 
   const subscriptionStatus = typeof row?.subscription_status === "string" ? row.subscription_status : "inactive";
   if (!["active", "trialing", "past_due"].includes(subscriptionStatus)) {
     throw new AuthError(402, "An active UnderAsk subscription is required before searching.");
   }
-  return { plan: normalizePlan(row?.plan), subscriptionStatus };
+  return {
+    plan: normalizePlan(row?.plan),
+    subscriptionStatus,
+    accessSource: row?.access_source === "beta" ? "beta" : "stripe",
+  };
 }
 
 async function reserveSearch(
