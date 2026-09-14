@@ -21,6 +21,13 @@ export type UnderAskAiCapacity = {
   latestResetRequests: string | null;
   latestResetTokens: string | null;
   latestOpenAiRequestId: string | null;
+  autotuneEnabled: boolean;
+  minConcurrency: number;
+  maxConcurrencyCap: number;
+  lastAutotuneAt: string | null;
+  lastAutotuneAction: string | null;
+  lastAutotuneReason: string | null;
+  lastScaleAt: string | null;
 };
 
 function n(value: unknown) {
@@ -84,5 +91,12 @@ export async function fetchUnderAskAiCapacity(accessToken: string): Promise<Unde
     latestResetRequests: nullableString(row.latest_reset_requests),
     latestResetTokens: nullableString(row.latest_reset_tokens),
     latestOpenAiRequestId: nullableString(row.latest_openai_request_id),
+    autotuneEnabled: Boolean(row.autotune_enabled),
+    minConcurrency: n(row.min_concurrency),
+    maxConcurrencyCap: n(row.max_concurrency_cap),
+    lastAutotuneAt: nullableString(row.last_autotune_at),
+    lastAutotuneAction: nullableString(row.last_autotune_action),
+    lastAutotuneReason: nullableString(row.last_autotune_reason),
+    lastScaleAt: nullableString(row.last_scale_at),
   };
 }
