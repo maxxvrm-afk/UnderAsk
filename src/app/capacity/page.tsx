@@ -95,7 +95,7 @@ export default function CapacityPage() {
               <div className="metric"><span>RUNNING NOW</span><strong className="accent">{data.running} / {data.maxConcurrency}</strong></div>
               <div className="metric"><span>LOAD</span><strong>{load.toFixed(0)}%</strong></div>
               <div className="metric"><span>429s · 24H</span><strong>{data.rateLimited24h}</strong></div>
-              <div className="metric"><span>REFUNDED · 24H</span><strong>{data.refunded24h}</strong></div>
+              <div className="metric"><span>AUTOTUNE</span><strong>{data.autotuneEnabled ? "ON" : "OFF"}</strong></div>
             </div>
 
             <div style={{ marginTop: 18, height: 10, borderRadius: 999, overflow: "hidden", background: "rgba(255,255,255,.08)" }}>
@@ -103,10 +103,17 @@ export default function CapacityPage() {
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(210px,1fr))", gap: 12, marginTop: 28, textAlign: "left" }}>
-              <article className="subscriptionGateCard"><strong>Controller</strong><p>Manual slots: {data.maxConcurrency}<br />Alert ceiling: {data.alertMaxConcurrency}<br />Queued manual: {data.queuedManual}<br />Queued alerts: {data.queuedAlert}</p></article>
-              <article className="subscriptionGateCard"><strong>24-hour traffic</strong><p>Jobs: {data.jobs24h}<br />Completed: {data.completed24h}<br />Failed: {data.failed24h}<br />Avg runtime: {duration(data.avgRuntimeMs)}</p></article>
+              <article className="subscriptionGateCard"><strong>Controller</strong><p>Current slots: {data.maxConcurrency}<br />Safety range: {data.minConcurrency}–{data.maxConcurrencyCap}<br />Alert ceiling: {data.alertMaxConcurrency}<br />Queued: {data.queuedManual + data.queuedAlert}</p></article>
+              <article className="subscriptionGateCard"><strong>Autotune</strong><p>Status: {data.autotuneEnabled ? "ON" : "OFF"}<br />Last decision: {(data.lastAutotuneAction || "waiting").toUpperCase()}<br />Last check: {when(data.lastAutotuneAt)}<br />Last scale: {when(data.lastScaleAt)}</p></article>
+              <article className="subscriptionGateCard"><strong>24-hour traffic</strong><p>Jobs: {data.jobs24h}<br />Completed: {data.completed24h}<br />Failed: {data.failed24h}<br />Refunded: {data.refunded24h}<br />Avg runtime: {duration(data.avgRuntimeMs)}</p></article>
               <article className="subscriptionGateCard"><strong>Token telemetry</strong><p>Input: {new Intl.NumberFormat().format(data.inputTokens24h)}<br />Output: {new Intl.NumberFormat().format(data.outputTokens24h)}<br />Remaining requests: {number(data.latestRemainingRequests)}<br />Remaining tokens: {number(data.latestRemainingTokens)}</p></article>
               <article className="subscriptionGateCard"><strong>Rate-limit state</strong><p>Status: {paused ? "PAUSED" : "OPEN"}<br />Pause until: {when(data.pauseUntil)}<br />Last rate limit: {when(data.lastRateLimitAt)}<br />Req reset: {data.latestResetRequests || "Not measured yet"}</p></article>
+            </div>
+
+            <div className="subscriptionGateCard" style={{ marginTop: 18, textAlign: "left" }}>
+              <strong>Latest autotune decision</strong>
+              <p>{data.lastAutotuneReason || "Waiting for the first autotune check."}</p>
+              <small style={{ opacity: .55 }}>The controller checks every 10 minutes. It only increases one slot at a time after a clean traffic window, and reduces capacity immediately when rate-limit pressure appears.</small>
             </div>
 
             <div className="subscriptionGateCard" style={{ marginTop: 18, textAlign: "left" }}>
@@ -116,7 +123,7 @@ export default function CapacityPage() {
             </div>
 
             <p className="lede small" style={{ marginTop: 16, fontSize: 12, opacity: .6 }}>
-              {lastUpdated ? `Last refreshed ${lastUpdated.toLocaleTimeString()}.` : ""} Slots are intentionally conservative until real customer traffic gives enough data to raise them safely.
+              {lastUpdated ? `Last refreshed ${lastUpdated.toLocaleTimeString()}.` : ""} Autotune remains bounded by the configured safety range.
             </p>
           </>
         )}
